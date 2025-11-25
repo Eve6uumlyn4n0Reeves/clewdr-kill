@@ -1,9 +1,3 @@
-export interface Tab {
-  id: string;
-  label: string;
-  color?: string;
-}
-
 export interface StatusMessageProps {
   type: "success" | "error" | "warning" | "info";
   message: string;
@@ -15,6 +9,7 @@ export interface ButtonProps {
   disabled?: boolean;
   isLoading?: boolean;
   variant?: "primary" | "secondary" | "danger" | "success";
+  size?: "sm" | "md" | "lg";
   className?: string;
   children: React.ReactNode;
 }
@@ -35,6 +30,8 @@ export interface FormInputProps {
   rows?: number;
   error?: string;
   onClear?: () => void;
+  min?: string | number;
+  max?: string | number;
 }
 
 export interface CardProps {

@@ -1,47 +1,19 @@
-// frontend/src/types/cookie.types.ts
-export interface UsageBreakdown {
-  total_input_tokens?: number;
-  total_output_tokens?: number;
-  sonnet_input_tokens?: number;
-  sonnet_output_tokens?: number;
-  opus_input_tokens?: number;
-  opus_output_tokens?: number;
-}
-
-export interface CookieStatus {
+export interface BanCookie {
   cookie: string;
-  reset_time: number | null;
-  supports_claude_1m?: boolean | null;
-  count_tokens_allowed?: boolean | null;
-  // New usage buckets
-  session_usage?: UsageBreakdown;
-  weekly_usage?: UsageBreakdown;
-  weekly_opus_usage?: UsageBreakdown;
-  lifetime_usage?: UsageBreakdown;
-  // Ephemeral quota utilizations (percent), attached by /api/cookies only
-  session_utilization?: number;
-  seven_day_utilization?: number;
-  seven_day_opus_utilization?: number;
-  // Resets at timestamps (ISO8601), attached by /api/cookies only
-  session_resets_at?: string | null;
-  seven_day_resets_at?: string | null;
-  seven_day_opus_resets_at?: string | null;
+  submitted_at?: string | null;
+  last_used_at?: string | null;
+  requests_sent?: number;
+  is_banned?: boolean;
+  reset_time?: string | null;
 }
 
-export interface UselessCookie {
-  cookie: string;
-  reason: unknown;
-}
+export type CookieItem = BanCookie;
 
-export interface CookieStatusInfo {
-  valid: CookieStatus[];
-  exhausted: CookieStatus[];
-  invalid: UselessCookie[];
+export interface BanQueueInfo {
+  pending: BanCookie[];
+  banned: BanCookie[];
+  total_requests: number;
 }
-
-export type CookieItem = Partial<CookieStatus> & Pick<CookieStatus, "cookie"> & {
-  reason?: unknown;
-};
 
 export interface CookieFormState {
   cookie: string;

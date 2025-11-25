@@ -2,7 +2,7 @@
 name = "clewdr"
 version = "0.11.26"
 edition = "2024"
-authors = ["Xerxes-2 <dspxue@gmail.com>", "LeenHawk <leenhawk@leenhawk.com>"]
+authors = [""]
 license = "AGPL-3.0"
 
 [lib]
@@ -33,7 +33,7 @@ axum = { version = "0.8", features = ["macros"] }
 regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["chrono", "env-filter"] }
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
@@ -42,7 +42,6 @@ base64 = "0.22"
 itertools = "0.14"
 async-trait = "0.1"
 toml = "0.9"
-eventsource-stream = "0.2"
 tracing-appender = "0.2"
 self-replace = { version = "1", optional = true }
 zip = { version = "6", optional = true, default-features = false, features = [
@@ -50,7 +49,6 @@ zip = { version = "6", optional = true, default-features = false, features = [
 ] }
 tempfile = { version = "3", optional = true }
 axum-auth = "0.8"
-tiktoken-rs = "0.7"
 passwords = "3"
 tower-http = { version = "0.6", features = [
     "compression-zstd",
@@ -63,36 +61,18 @@ figment = { version = "0.10", features = ["env", "toml"] }
 arc-swap = "1"
 url = { version = "2", features = ["serde"] }
 strum = { version = "0.27", features = ["derive"] }
-moka = { version = "0.12", features = ["sync"] }
 tower = "0.5"
 bytes = "1"
-trie-rs = "0.4"
 async-stream = "0.3"
-struct_iterable = "0.1"
+rand = "0.8"
 console-subscriber = { version = "0.5", optional = true }
-yup-oauth2 = { version = "12", default-features = false, features = [
-    "aws-lc-rs",
-    "hyper-rustls",
-    "service-account",
-] }
-aws-lc-rs = "1"
-rustls = { version = "0.23", default-features = false, features = [
-    "aws_lc_rs",
-] }
-hyper-util = "0.1"
-hyper-http-proxy = "1"
 http = "1"
 snafu = { version = "0.8", features = ["futures", "rust_1_81"] }
-serde_with = { version = "3", features = ["chrono_0_4"] }
-oauth2 = { version = "5", default-features = false }
 ractor = "0.15"
 mimalloc = { version = "0.1", optional = true }
 dhat = { version = "0", optional = true }
 etcetera = { version = "0", optional = true }
-sea-orm = { version = "1", optional = true, default-features = false, features = [
-    "macros",
-    "runtime-tokio-rustls",
-] }
+sysinfo = "0.30"
 
 [target.'cfg(windows)'.dependencies]
 enable-ansi-support = "0.3"
@@ -107,7 +87,3 @@ embed-resource = ["dep:tower-serve-static", "dep:include_dir"]
 external-resource = ["tower-http/fs"]
 mimalloc = ["dep:mimalloc"]
 dhat-heap = ["dep:dhat"]
-db = []
-db-sqlite = ["db", "dep:sea-orm", "sea-orm/sqlx-sqlite"]
-db-postgres = ["db", "dep:sea-orm", "sea-orm/sqlx-postgres"]
-db-mysql = ["db", "dep:sea-orm", "sea-orm/sqlx-mysql"]

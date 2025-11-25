@@ -51,12 +51,3 @@ pub struct Tool {
     #[serde(rename = "type")]
     pub type_: String,
 }
-
-impl Tool {
-    pub fn web_search() -> Self {
-        Tool {
-            name: "web_search".to_string(),
-            type_: "web_search_v0".to_string(),
-        }
-    }
-}

@@ -1,193 +1,244 @@
 use std::{
-    collections::HashSet,
-    env,
     fmt::{Debug, Display},
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
-use axum::http::{Uri, uri::Scheme};
-use clap::Parser;
+use axum::http::uri::{Authority, Scheme};
 use colored::Colorize;
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
-use http::uri::Authority;
+use http::Uri;
 use passwords::PasswordGenerator;
 use serde::{Deserialize, Serialize};
-use tokio::spawn;
-use tracing::error;
 use wreq::{Proxy, Url};
-use yup_oauth2::ServiceAccountKey;
 
-use super::{CONFIG_PATH, ENDPOINT_URL, key::KeyStatus};
-use crate::{
-    Args,
-    config::{
-        CC_CLIENT_ID, CookieStatus, UselessCookie, default_check_update, default_ip,
-        default_max_retries, default_port, default_skip_cool_down, default_use_real_roles,
-    },
-    error::ClewdrError,
-    utils::enabled,
-};
+use super::{CONFIG_PATH, ENDPOINT_URL};
+use crate::error::ClewdrError;
 
-/// Generates a random password for authentication
-/// Creates a secure 64-character password with mixed character types
-///
-/// # Returns
-/// A random password string
 fn generate_password() -> String {
     let pg = PasswordGenerator {
         length: 64,
         numbers: true,
         lowercase_letters: true,
         uppercase_letters: true,
-        symbols: false,
+        symbols: true, // Enable symbols for better security
         spaces: false,
         exclude_similar_characters: true,
         strict: true,
     };
-
-    println!("{}", "Generating random password......".green());
-    pg.generate_one().unwrap()
+    println!("{}", "Generating secure admin password...".green());
+    pg.generate_one()
+        .expect("Password generator should successfully generate a password")
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct VertexConfig {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BanConfig {
+    #[serde(default = "default_ban_concurrency")]
+    pub concurrency: usize,
+    #[serde(default = "default_ban_pause_seconds")]
+    pub pause_seconds: u64,
+    #[serde(default = "default_ban_prompts_dir")]
+    pub prompts_dir: String,
+    #[serde(default = "default_ban_models")]
+    pub models: Vec<String>,
+    #[serde(default = "default_ban_max_tokens")]
+    pub max_tokens: u32,
+    #[serde(default = "default_ban_request_timeout")]
+    pub request_timeout: u64,
+    #[serde(default = "default_ban_retry_attempts")]
+    pub retry_attempts: u32,
+    #[serde(default = "default_adaptive_throttling")]
+    pub adaptive_throttling: bool,
+    #[serde(default = "default_smart_error_handling")]
+    pub smart_error_handling: bool,
+    #[serde(default = "default_proxy_rotation")]
+    pub proxy_rotation: bool,
+    #[serde(default = "default_user_agent_rotation")]
+    pub user_agent_rotation: bool,
+    #[serde(default = "default_request_jitter_min")]
+    pub request_jitter_min: u64,
+    #[serde(default = "default_request_jitter_max")]
+    pub request_jitter_max: u64,
     #[serde(default)]
-    pub credential: Option<ServiceAccountKey>,
-    #[serde(default)]
-    pub credentials: Vec<ServiceAccountKey>,
+    pub working_hours: WorkingHoursConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum PersistenceMode {
-    #[default]
-    File,
-    Sqlite,
-    Postgres,
-    Mysql,
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorkingHoursConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_work_start")]
+    pub start: String,
+    #[serde(default = "default_work_end")]
+    pub end: String,
+    #[serde(default = "default_timezone")]
+    pub timezone: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct PersistenceConfig {
-    /// file | sqlite | postgres
-    #[serde(default)]
-    pub mode: PersistenceMode,
-    /// Preferred database URL. Examples:
-    /// - sqlite:///etc/clewdr/clewdr.db
-    /// - postgres://user:pass@host:5432/db
-    /// - mysql://user:pass@host:3306/db
-    #[serde(default)]
-    pub database_url: Option<String>,
-    /// Shortcut for sqlite path when database_url is not provided
-    #[serde(default)]
-    pub sqlite_path: Option<String>,
-}
-
-impl VertexConfig {
-    pub fn validate(&self) -> bool {
-        !self.credential_list().is_empty()
-    }
-
-    pub fn credential_list(&self) -> Vec<ServiceAccountKey> {
-        let mut list = self.credentials.clone();
-        if let Some(single) = &self.credential
-            && !list
-                .iter()
-                .any(|cred| cred.client_email == single.client_email)
-        {
-            list.push(single.clone());
+impl Default for BanConfig {
+    fn default() -> Self {
+        Self {
+            concurrency: default_ban_concurrency(),
+            pause_seconds: default_ban_pause_seconds(),
+            prompts_dir: default_ban_prompts_dir(),
+            models: default_ban_models(),
+            max_tokens: default_ban_max_tokens(),
+            request_timeout: default_ban_request_timeout(),
+            retry_attempts: default_ban_retry_attempts(),
+            adaptive_throttling: default_adaptive_throttling(),
+            smart_error_handling: default_smart_error_handling(),
+            proxy_rotation: default_proxy_rotation(),
+            user_agent_rotation: default_user_agent_rotation(),
+            request_jitter_min: default_request_jitter_min(),
+            request_jitter_max: default_request_jitter_max(),
+            working_hours: WorkingHoursConfig::default(),
         }
-        list
     }
 }
 
-/// A struct representing the configuration of the application
+impl Default for WorkingHoursConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            start: default_work_start(),
+            end: default_work_end(),
+            timezone: default_timezone(),
+        }
+    }
+}
+
+impl BanConfig {
+    pub fn max_tokens(&self) -> u32 {
+        self.max_tokens
+    }
+
+    pub fn is_within_working_hours(&self) -> bool {
+        if !self.working_hours.enabled {
+            return true;
+        }
+
+        use chrono::{Local, NaiveTime};
+
+        let local_time = Local::now();
+
+        if let (Ok(start_time), Ok(end_time)) = (
+            NaiveTime::parse_from_str(&self.working_hours.start, "%H:%M"),
+            NaiveTime::parse_from_str(&self.working_hours.end, "%H:%M"),
+        ) {
+            let current_time = local_time.time();
+            return current_time >= start_time && current_time <= end_time;
+        }
+
+        true // Fallback to allow if parsing fails
+    }
+
+    pub fn get_jitter_delay(&self) -> std::time::Duration {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let delay_ms = rng.gen_range(self.request_jitter_min..=self.request_jitter_max);
+        std::time::Duration::from_millis(delay_ms)
+    }
+}
+
+fn default_ban_concurrency() -> usize {
+    50
+}
+
+fn default_ban_pause_seconds() -> u64 {
+    300 // 5 minutes
+}
+
+fn default_ban_prompts_dir() -> String {
+    "./ban_prompts".to_string()
+}
+
+fn default_ban_models() -> Vec<String> {
+    vec![
+        "claude-3-7-sonnet-20250219".to_string(),
+        "claude-sonnet-4-20250514".to_string(),
+    ]
+}
+
+fn default_ban_max_tokens() -> u32 {
+    512
+}
+
+fn default_ban_request_timeout() -> u64 {
+    30000 // 30 seconds
+}
+
+fn default_ban_retry_attempts() -> u32 {
+    3
+}
+
+fn default_adaptive_throttling() -> bool {
+    true
+}
+
+fn default_smart_error_handling() -> bool {
+    true
+}
+
+fn default_proxy_rotation() -> bool {
+    false
+}
+
+fn default_user_agent_rotation() -> bool {
+    false
+}
+
+fn default_request_jitter_min() -> u64 {
+    200
+}
+
+fn default_request_jitter_max() -> u64 {
+    1000
+}
+
+fn default_work_start() -> String {
+    "09:00".to_string()
+}
+
+fn default_work_end() -> String {
+    "18:00".to_string()
+}
+
+fn default_timezone() -> String {
+    "UTC".to_string()
+}
+
+fn default_ip() -> IpAddr {
+    Ipv4Addr::new(127, 0, 0, 1).into()
+}
+
+fn default_port() -> u16 {
+    8484
+}
+
+/// Simplified configuration for ban operations
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClewdrConfig {
-    // key configurations
-    #[serde(default)]
-    pub vertex: VertexConfig,
-    #[serde(default)]
-    pub cookie_array: HashSet<CookieStatus>,
-    #[serde(default)]
-    pub wasted_cookie: HashSet<UselessCookie>,
-    #[serde(default)]
-    pub gemini_keys: HashSet<KeyStatus>,
-
-    // Persistence settings
-    #[serde(default)]
-    pub persistence: PersistenceConfig,
-
-    // Server settings, cannot hot reload
+    // Server settings
     #[serde(default = "default_ip")]
     ip: IpAddr,
     #[serde(default = "default_port")]
     port: u16,
 
-    // App settings, can hot reload, but meaningless
-    #[serde(default = "default_check_update")]
-    pub check_update: bool,
-    #[serde(default)]
-    pub auto_update: bool,
-    #[serde(default)]
-    pub no_fs: bool,
-    #[serde(default)]
-    pub log_to_file: bool,
-
-    // Network settings, can hot reload
-    #[serde(default)]
-    password: String,
+    // Authentication
     #[serde(default)]
     admin_password: String,
+
+    // Network settings
     #[serde(default)]
     pub proxy: Option<String>,
-    #[serde(default)]
-    pub rproxy: Option<Url>,
 
-    // Api settings, can hot reload
-    #[serde(default = "default_max_retries")]
-    pub max_retries: usize,
+    // Ban configuration
     #[serde(default)]
-    pub preserve_chats: bool,
-    #[serde(default)]
-    pub web_search: bool,
-    #[serde(default)]
-    pub enable_web_count_tokens: bool,
+    pub ban: BanConfig,
 
-    // Cookie settings, can hot reload
-    #[serde(default)]
-    pub skip_first_warning: bool,
-    #[serde(default)]
-    pub skip_second_warning: bool,
-    #[serde(default)]
-    pub skip_restricted: bool,
-    #[serde(default)]
-    pub skip_non_pro: bool,
-    #[serde(default = "default_skip_cool_down")]
-    pub skip_rate_limit: bool,
-    #[serde(default)]
-    pub skip_normal_pro: bool,
-
-    // Prompt configurations, can hot reload
-    #[serde(default = "default_use_real_roles")]
-    pub use_real_roles: bool,
-    #[serde(default)]
-    pub custom_h: Option<String>,
-    #[serde(default)]
-    pub custom_a: Option<String>,
-    #[serde(default)]
-    pub custom_prompt: String,
-
-    // Claude Code settings, can hot reload
-    #[serde(default)]
-    pub claude_code_client_id: Option<String>,
-    #[serde(default)]
-    pub custom_system: Option<String>,
-
-    // Skip field, can hot reload
+    // Skip field
     #[serde(skip)]
     pub wreq_proxy: Option<Proxy>,
 }
@@ -195,53 +246,20 @@ pub struct ClewdrConfig {
 impl Default for ClewdrConfig {
     fn default() -> Self {
         Self {
-            vertex: Default::default(),
-            max_retries: default_max_retries(),
-            check_update: default_check_update(),
-            auto_update: false,
-            cookie_array: HashSet::new(),
-            wasted_cookie: HashSet::new(),
-            gemini_keys: HashSet::new(),
-            persistence: Default::default(),
-            password: String::new(),
-            admin_password: String::new(),
-            proxy: None,
             ip: default_ip(),
             port: default_port(),
-            rproxy: None,
-            use_real_roles: default_use_real_roles(),
-            custom_prompt: String::new(),
-            custom_h: None,
-            custom_a: None,
+            admin_password: String::new(),
+            proxy: None,
+            ban: BanConfig::default(),
             wreq_proxy: None,
-            preserve_chats: false,
-            web_search: false,
-            enable_web_count_tokens: false,
-            skip_first_warning: false,
-            skip_second_warning: false,
-            skip_restricted: false,
-            skip_non_pro: false,
-            skip_rate_limit: default_skip_cool_down(),
-            skip_normal_pro: false,
-            claude_code_client_id: None,
-            custom_system: None,
-            no_fs: false,
-            log_to_file: false,
         }
     }
 }
 
 impl Display for ClewdrConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // one line per field
         let authority = self.address();
         let authority: Authority = authority.to_string().parse().map_err(|_| std::fmt::Error)?;
-        let api_url = Uri::builder()
-            .scheme(Scheme::HTTP)
-            .authority(authority.to_owned())
-            .path_and_query("/v1")
-            .build()
-            .map_err(|_| std::fmt::Error)?;
         let web_url = Uri::builder()
             .scheme(Scheme::HTTP)
             .authority(authority.to_string())
@@ -250,198 +268,48 @@ impl Display for ClewdrConfig {
             .map_err(|_| std::fmt::Error)?;
         write!(
             f,
-            "Claude(Claude and OpenAI format) / Gemini(Gemini format) Endpoint: {}\n\
-            Claude Code(Claude and OpenAI format) Endpoint: {}\n\
-            Vertex(Gemini format) Endpoint: {}\n\
-            Gemini(OpenAI format) Endpoint: {}\n\
-            Vertex(OpenAI format) Endpoint: {}\n\
-            API Password: {}\n\
-            Web Admin Endpoint: {}\n\
-            Web Admin Password: {}\n",
-            api_url.to_string().green().underline(),
-            (web_url.to_string() + "code/v1").green().underline(),
-            (api_url.to_string() + "/vertex").green().underline(),
-            (web_url.to_string() + "gemini").green().underline(),
-            (web_url.to_string() + "gemini/vertex").green().underline(),
-            self.password.yellow(),
+            "Web Admin Endpoint: {}\n\
+            Web Admin Password: {}\n\
+            Ban Workers: {}\n\
+            Prompts Directory: {}\n\
+            Models: {}",
             web_url.to_string().green().underline(),
             self.admin_password.yellow(),
+            self.ban.concurrency.to_string().cyan(),
+            self.ban.prompts_dir.blue(),
+            self.ban.models.join(", ").magenta(),
         )?;
         if let Some(ref proxy) = self.proxy {
-            writeln!(f, "Proxy: {}", proxy.to_string().blue())?;
-        }
-        if let Some(ref rproxy) = self.rproxy {
-            writeln!(f, "Reverse Proxy: {}", rproxy.to_string().blue())?;
-        }
-        if self.vertex.validate() {
-            writeln!(f, "Vertex {}", "Enabled".green().bold())?;
-        }
-        writeln!(f, "Skip non Pro: {}", enabled(self.skip_non_pro))?;
-        writeln!(f, "Skip restricted: {}", enabled(self.skip_restricted))?;
-        writeln!(
-            f,
-            "Skip second warning: {}",
-            enabled(self.skip_second_warning)
-        )?;
-        writeln!(
-            f,
-            "Skip first warning: {}",
-            enabled(self.skip_first_warning)
-        )?;
-        writeln!(f, "Skip normal Pro: {}", enabled(self.skip_normal_pro))?;
-        writeln!(f, "Skip rate limit: {}", enabled(self.skip_rate_limit))?;
-        writeln!(
-            f,
-            "Web count_tokens: {}",
-            enabled(self.enable_web_count_tokens)
-        )?;
-        match self.persistence.mode {
-            PersistenceMode::File => writeln!(f, "Persistence: file")?,
-            PersistenceMode::Sqlite => writeln!(
-                f,
-                "Persistence: sqlite{}",
-                self.persistence.sqlite_path.as_deref().unwrap_or("").blue()
-            )?,
-            PersistenceMode::Postgres => writeln!(
-                f,
-                "Persistence: postgres ({})",
-                self.persistence
-                    .database_url
-                    .as_deref()
-                    .unwrap_or("env: CLEWDR_PERSISTENCE__DATABASE_URL")
-                    .blue()
-            )?,
-            PersistenceMode::Mysql => writeln!(
-                f,
-                "Persistence: mysql ({})",
-                self.persistence
-                    .database_url
-                    .as_deref()
-                    .unwrap_or("env: CLEWDR_PERSISTENCE__DATABASE_URL")
-                    .blue()
-            )?,
+            writeln!(f, "\nProxy: {}", proxy.to_string().blue())?;
         }
         Ok(())
     }
 }
 
 impl ClewdrConfig {
-    pub fn is_db_mode(&self) -> bool {
-        matches!(
-            self.persistence.mode,
-            PersistenceMode::Sqlite | PersistenceMode::Postgres | PersistenceMode::Mysql
-        )
-    }
-
-    pub fn database_url(&self) -> Option<String> {
-        if let Some(url) = &self.persistence.database_url {
-            return Some(url.to_owned());
-        }
-        match self.persistence.mode {
-            PersistenceMode::Sqlite => {
-                if let Some(path) = &self.persistence.sqlite_path {
-                    // Ensure read-write-create mode for sqlite files
-                    return Some(format!("sqlite://{}?mode=rwc", path));
-                }
-                // default sqlite path oriented for container persistence
-                Some("sqlite:///etc/clewdr/clewdr.db?mode=rwc".to_string())
-            }
-            PersistenceMode::Postgres => None,
-            PersistenceMode::Mysql => None,
-            PersistenceMode::File => None,
-        }
-    }
-    pub fn user_auth(&self, key: &str) -> bool {
-        key == self.password
-    }
-
     pub fn admin_auth(&self, key: &str) -> bool {
         key == self.admin_password
     }
 
-    pub fn cc_client_id(&self) -> String {
-        self.claude_code_client_id
-            .as_deref()
-            .unwrap_or(CC_CLIENT_ID)
-            .to_string()
-    }
-
-    /// Loads configuration from files and environment variables
-    /// Combines settings from config.toml, clewdr.toml, and environment variables
-    /// Also loads cookies from a file if specified
-    ///
-    /// # Returns
-    /// * Config instance
-    pub fn new() -> Self {
-        // Load config from TOML then override with environment variables.
-        // Use double underscore "__" to map nested keys, e.g. CLEWDR_PERSISTENCE__MODE=postgres
-        let mut config: ClewdrConfig = Figment::from(Toml::file(CONFIG_PATH.as_path()))
-            .admerge(Env::prefixed("CLEWDR_").split("__"))
-            .extract_lossy()
-            .inspect_err(|e| {
-                error!("Failed to load config: {}", e);
-            })
-            .unwrap_or_default();
-        if let Some(credential) = env::var("CLEWDR_VERTEX_CREDENTIAL").ok().and_then(|v| {
-            serde_json::from_str::<ServiceAccountKey>(&v)
-                .map_err(|e| error!("Failed to parse vertex credential: {}", e))
-                .ok()
-        }) {
-            config.vertex.credential = Some(credential);
-        }
-        if let Some(ref f) = Args::try_parse().ok().and_then(|a| a.file) {
-            // load cookies from file
-            if f.exists() {
-                if let Ok(cookies) = std::fs::read_to_string(f) {
-                    let cookies = cookies
-                        .lines()
-                        .filter_map(|line| CookieStatus::new(line, None).ok());
-                    config.cookie_array.extend(cookies);
-                } else {
-                    error!("Failed to read cookie file: {}", f.display());
-                }
-            } else {
-                error!("Cookie file not found: {}", f.display());
-            }
-        }
-        let config = config.validate();
-        if !config.is_db_mode() {
-            let config_clone = config.to_owned();
-            spawn(async move {
-                config_clone.save().await.unwrap_or_else(|e| {
-                    error!("Failed to save config: {}", e);
-                });
-            });
-        }
-        config
-    }
-
-    /// Gets the API endpoint for the Claude service
-    /// Returns the reverse proxy URL if configured, otherwise the default endpoint
-    ///
-    /// # Returns
-    /// The URL for the API endpoint
     pub fn endpoint(&self) -> Url {
-        if let Some(ref proxy) = self.rproxy {
-            return proxy.to_owned();
-        }
         ENDPOINT_URL.to_owned()
     }
 
-    /// address of proxy
     pub fn address(&self) -> SocketAddr {
         SocketAddr::new(self.ip, self.port)
     }
 
-    /// Save the configuration to a file
+    pub fn new() -> Self {
+        let mut config: ClewdrConfig = Figment::from(Toml::file(CONFIG_PATH.as_path()))
+            .admerge(Env::prefixed("CLEWDR_").split("__"))
+            .extract_lossy()
+            .unwrap_or_default();
+
+        config = config.validate();
+        config
+    }
+
     pub async fn save(&self) -> Result<(), ClewdrError> {
-        // If DB feature compiled and DB mode enabled, persist to DB; otherwise write to file
-        if crate::persistence::storage().is_enabled() {
-            return crate::persistence::storage().persist_config(self).await;
-        }
-        if self.no_fs {
-            return Ok(());
-        }
         if let Some(parent) = CONFIG_PATH.parent()
             && !parent.exists()
         {
@@ -450,32 +318,31 @@ impl ClewdrConfig {
         Ok(tokio::fs::write(CONFIG_PATH.as_path(), toml::ser::to_string_pretty(self)?).await?)
     }
 
-    /// Validate the configuration
     pub fn validate(mut self) -> Self {
-        if self.password.trim().is_empty() {
-            self.password = generate_password();
-        }
         if self.admin_password.trim().is_empty() {
             self.admin_password = generate_password();
         }
-        self.cookie_array = self.cookie_array.into_iter().map(|x| x.reset()).collect();
         self.wreq_proxy = self.proxy.to_owned().and_then(|p| {
             Proxy::all(p)
                 .inspect_err(|e| {
                     self.proxy = None;
-                    error!("Failed to parse proxy: {}", e);
+                    tracing::error!("Failed to parse proxy: {}", e);
                 })
                 .ok()
         });
-        let mut seen = HashSet::new();
-        let mut credentials = Vec::new();
-        for cred in self.vertex.credential_list() {
-            if seen.insert(cred.client_email.clone()) {
-                credentials.push(cred);
-            }
-        }
-        self.vertex.credentials = credentials;
-        self.vertex.credential = None;
         self
+    }
+
+    // Setter methods for private fields
+    pub fn set_ip(&mut self, ip: IpAddr) {
+        self.ip = ip;
+    }
+
+    pub fn set_port(&mut self, port: u16) {
+        self.port = port;
+    }
+
+    pub fn set_admin_password(&mut self, password: String) {
+        self.admin_password = password;
     }
 }

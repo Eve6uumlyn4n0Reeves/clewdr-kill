@@ -12,16 +12,12 @@ interface AppContextType {
   version: string;
   isAuthenticated: boolean;
   setIsAuthenticated: (status: boolean) => void;
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
 }
 
 const defaultContext: AppContextType = {
   version: "",
   isAuthenticated: false,
   setIsAuthenticated: () => {},
-  activeTab: "claude",
-  setActiveTab: () => {},
 };
 
 const AppContext = createContext<AppContextType>(defaultContext);
@@ -33,7 +29,6 @@ interface AppProviderProps {
 export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const [version, setVersion] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [activeTab, setActiveTab] = useState("claude");
 
   useEffect(() => {
     // Fetch and set the version when component mounts
@@ -75,8 +70,6 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         version,
         isAuthenticated,
         setIsAuthenticated,
-        activeTab,
-        setActiveTab,
       }}
     >
       {children}

@@ -7,12 +7,19 @@ const Button: React.FC<ButtonProps> = ({
   disabled = false,
   isLoading = false,
   variant = "primary",
+  size = "md",
   className = "",
   children,
 }) => {
   // Base classes
+  const sizeClasses: Record<typeof size, string> = {
+    sm: "py-2 px-3 text-sm",
+    md: "py-3 px-4",
+    lg: "py-4 px-5 text-lg",
+  };
+
   const baseClasses =
-    "py-3 px-4 rounded-md text-white font-medium transition-all duration-200";
+    "rounded-md text-white font-medium transition-all duration-200 " + sizeClasses[size];
 
   // Variant-specific classes
   const variantClasses = {

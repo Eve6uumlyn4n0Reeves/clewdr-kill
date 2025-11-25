@@ -15,6 +15,8 @@ const FormInput: React.FC<FormInputProps> = ({
   rows = 3,
   error,
   onClear,
+  min,
+  max,
 }) => {
   const inputClasses = `w-full bg-gray-700 border border-gray-600 rounded-md focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 text-sm text-gray-200 transition-all duration-200 placeholder-gray-400 ${
     isTextarea ? "min-h-32" : ""
@@ -52,6 +54,8 @@ const FormInput: React.FC<FormInputProps> = ({
             placeholder={placeholder}
             className={`p-4 ${inputClasses}`}
             disabled={disabled}
+            min={min}
+            max={max}
           />
         )}
         {value && onClear && (

@@ -19,15 +19,18 @@ export const useAuth = (onAuthenticated?: (status: boolean) => void) => {
     }
   }, []);
 
-  const checkToken = async (token: string) => {
+  const checkToken = async (tokenFromStorage?: string) => {
     setIsLoading(true);
     setError("");
 
     try {
-      // Use the centralized API function instead of direct fetch
+      const token = tokenFromStorage ?? authToken;
       const isValid = await validateAuthToken(token);
 
       if (isValid) {
+        if (tokenFromStorage) {
+          setSavedToken(maskToken(tokenFromStorage));
+        }
         setIsAuthenticated(true);
         if (onAuthenticated) {
           onAuthenticated(true);
@@ -65,7 +68,6 @@ export const useAuth = (onAuthenticated?: (status: boolean) => void) => {
     setError("");
 
     try {
-      // Use the centralized API function instead of direct fetch
       const isValid = await validateAuthToken(token);
 
       if (isValid) {

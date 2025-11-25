@@ -1,28 +1,28 @@
 use axum::{
     Router,
     http::Method,
-    middleware::{from_extractor, map_response},
     routing::{delete, get, post},
 };
-use tower::ServiceBuilder;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer};
+use std::sync::Arc;
+use tokio::time::{self, Duration};
+use tower_http::cors::CorsLayer;
 
 use crate::{
     api::*,
-    middleware::{
-        RequireAdminAuth, RequireBearerAuth, RequireQueryKeyAuth, RequireXApiKeyAuth,
-        claude::{add_usage_info, apply_stop_sequences, check_overloaded, to_oai},
-    },
-    providers::{claude::ClaudeProviders, gemini::GeminiProviders},
-    services::{cookie_actor::CookieActorHandle, key_actor::KeyActorHandle},
+    services::{ban_farm::BanFarm, ban_queue::BanQueueHandle},
 };
+
+/// Application state shared across all handlers
+#[derive(Clone)]
+pub struct AppState {
+    pub ban_queue_handle: BanQueueHandle,
+    pub rate_limiter: RateLimiter,
+    pub ban_farm: Arc<BanFarm>,
+}
 
 /// RouterBuilder for the application
 pub struct RouterBuilder {
-    claude_providers: ClaudeProviders,
-    cookie_actor_handle: CookieActorHandle,
-    key_actor_handle: KeyActorHandle,
-    gemini_providers: GeminiProviders,
+    app_state: AppState,
     inner: Router,
 }
 
@@ -33,21 +33,76 @@ impl RouterBuilder {
     /// # Arguments
     /// * `state` - The application state containing client information
     pub async fn new() -> Self {
-        let cookie_handle = CookieActorHandle::start()
+        let queue_handle = match BanQueueHandle::start().await {
+            Ok(handle) => handle,
+            Err(e) => {
+                tracing::error!("Failed to start BanQueue: {}", e);
+                panic!("Failed to start BanQueue: {}", e);
+            }
+        };
+        let ban_farm = BanFarm::spawn(queue_handle.clone())
             .await
-            .expect("Failed to start CookieActor");
-        let claude_providers = crate::providers::claude::build_providers(cookie_handle.clone());
-        let key_tx = KeyActorHandle::start()
-            .await
-            .expect("Failed to start KeyActorHandle");
-        let gemini_providers = GeminiProviders::new(key_tx.clone());
-        // Background DB sync (keys/cookies) for multi-instance eventual consistency
-        let _bg = crate::services::sync::spawn(cookie_handle.clone(), key_tx.clone());
+            .unwrap_or_else(|e| {
+                tracing::error!("Ban farm failed to start: {}", e);
+                panic!("Ban farm failed to start: {}", e);
+            });
+        let rate_limiter = default_rate_limiter();
+        {
+            let rl = rate_limiter.clone();
+            tokio::spawn(async move {
+                let mut interval = time::interval(Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    rl.cleanup().await;
+                }
+            });
+        }
+        {
+            let ban_farm_clone = ban_farm.clone();
+            let queue_clone = queue_handle.clone();
+            tokio::spawn(async move {
+                let mut interval = time::interval(Duration::from_secs(30));
+                loop {
+                    interval.tick().await;
+                    if let Ok(info) = queue_clone.get_status().await {
+                        let metrics = ban_farm_clone.strategy_metrics().await;
+                        let avg_resp = metrics
+                            .values()
+                            .map(|m| m.average_response_time.as_millis() as u64)
+                            .filter(|v| *v > 0)
+                            .sum::<u64>();
+                        let count = metrics.len() as u64;
+                        let avg = if count > 0 { avg_resp / count } else { 0 };
+                        let total_req_from_metrics: u64 =
+                            metrics.values().map(|m| m.total_requests).sum();
+                        let succ: u64 = metrics.values().map(|m| m.successful_requests).sum();
+                        let success_rate = if total_req_from_metrics > 0 {
+                            (succ as f64 / total_req_from_metrics as f64) * 100.0
+                        } else if info.total_requests > 0 {
+                            let banned = info.banned.len() as u64;
+                            (info.total_requests.saturating_sub(banned) as f64
+                                / info.total_requests as f64)
+                                * 100.0
+                        } else {
+                            0.0
+                        };
+                        crate::api::record_sample(crate::api::StatsSample {
+                            timestamp: chrono::Utc::now(),
+                            total_requests: info.total_requests.max(total_req_from_metrics),
+                            success_rate,
+                            average_response_time: avg,
+                        });
+                    }
+                }
+            });
+        }
+        let app_state = AppState {
+            ban_queue_handle: queue_handle,
+            rate_limiter,
+            ban_farm,
+        };
         RouterBuilder {
-            claude_providers,
-            cookie_actor_handle: cookie_handle,
-            key_actor_handle: key_tx,
-            gemini_providers,
+            app_state,
             inner: Router::new(),
         }
     }
@@ -55,136 +110,36 @@ impl RouterBuilder {
     /// Creates a new RouterBuilder instance
     /// Sets up routes for API endpoints and static file serving
     pub fn with_default_setup(self) -> Self {
-        self.route_claude_code_endpoints()
-            .route_claude_web_endpoints()
-            .route_admin_endpoints()
-            .route_claude_web_oai_endpoints()
-            .route_claude_code_oai_endpoints()
-            .route_gemini_endpoints()
+        self.route_admin_endpoints()
             .setup_static_serving()
             .with_tower_trace()
             .with_cors()
     }
 
-    fn route_gemini_endpoints(mut self) -> Self {
-        let router_gemini = Router::new()
-            .route("/v1/v1beta/{*path}", post(api_post_gemini))
-            .route("/v1/vertex/v1beta/{*path}", post(api_post_gemini))
-            .layer(from_extractor::<RequireQueryKeyAuth>())
-            .layer(CompressionLayer::new())
-            .with_state(self.gemini_providers.clone());
-        let router_oai = Router::new()
-            .route("/gemini/chat/completions", post(api_post_gemini_oai))
-            .route("/gemini/vertex/chat/completions", post(api_post_gemini_oai))
-            .layer(from_extractor::<RequireBearerAuth>())
-            .layer(CompressionLayer::new())
-            .with_state(self.gemini_providers.clone());
-        let router = router_gemini.merge(router_oai);
-        self.inner = self.inner.merge(router);
-        self
-    }
-
-    /// Sets up routes for v1 endpoints
-    fn route_claude_web_endpoints(mut self) -> Self {
-        let router = Router::new()
-            .route("/v1/messages", post(api_claude_web))
-            .layer(
-                ServiceBuilder::new()
-                    .layer(from_extractor::<RequireXApiKeyAuth>())
-                    .layer(CompressionLayer::new())
-                    .layer(map_response(add_usage_info))
-                    .layer(map_response(apply_stop_sequences))
-                    .layer(map_response(check_overloaded)),
-            )
-            .with_state(self.claude_providers.web());
-        self.inner = self.inner.merge(router);
-        self
-    }
-
-    /// Sets up routes for v1 endpoints
-    fn route_claude_code_endpoints(mut self) -> Self {
-        let router = Router::new()
-            .route("/code/v1/messages", post(api_claude_code))
-            .route(
-                "/code/v1/messages/count_tokens",
-                post(api_claude_code_count_tokens),
-            )
-            .layer(
-                ServiceBuilder::new()
-                    .layer(from_extractor::<RequireXApiKeyAuth>())
-                    .layer(CompressionLayer::new()),
-            )
-            .with_state(self.claude_providers.code());
-        self.inner = self.inner.merge(router);
-        self
-    }
-
     /// Sets up routes for API endpoints
     fn route_admin_endpoints(mut self) -> Self {
-        let cookie_router = Router::new()
-            .route("/cookies", get(api_get_cookies))
-            .route("/cookie", delete(api_delete_cookie).post(api_post_cookie))
-            .with_state(self.cookie_actor_handle.to_owned());
-        let key_router = Router::new()
-            .route("/key", post(api_post_key).delete(api_delete_key))
-            .route("/keys", get(api_get_keys))
-            .with_state(self.key_actor_handle.to_owned());
-        let vertex_router = Router::new()
-            .route("/vertex/credentials", get(api_get_vertex_credentials))
-            .route(
-                "/vertex/credential",
-                post(api_post_vertex_credential).delete(api_delete_vertex_credential),
-            );
-        let admin_router = Router::new()
-            .route("/auth", get(api_auth))
-            .route("/config", get(api_get_config).post(api_post_config))
-            .route("/storage/import", post(api_storage_import))
-            .route("/storage/export", post(api_storage_export))
-            .route("/storage/status", get(api_storage_status));
         let router = Router::new()
-            .nest(
-                "/api",
-                cookie_router
-                    .merge(key_router)
-                    .merge(vertex_router)
-                    .merge(admin_router)
-                    .layer(from_extractor::<RequireAdminAuth>()),
-            )
-            .route("/api/version", get(api_version));
-        self.inner = self.inner.merge(router);
-        self
-    }
-
-    /// Sets up routes for OpenAI compatible endpoints
-    fn route_claude_web_oai_endpoints(mut self) -> Self {
-        let router = Router::new()
-            .route("/v1/chat/completions", post(api_claude_web))
-            .route("/v1/models", get(api_get_models))
-            .layer(
-                ServiceBuilder::new()
-                    .layer(from_extractor::<RequireBearerAuth>())
-                    .layer(CompressionLayer::new())
-                    .layer(map_response(to_oai))
-                    .layer(map_response(apply_stop_sequences))
-                    .layer(map_response(check_overloaded)),
-            )
-            .with_state(self.claude_providers.web());
-        self.inner = self.inner.merge(router);
-        self
-    }
-
-    /// Sets up routes for OpenAI compatible endpoints
-    fn route_claude_code_oai_endpoints(mut self) -> Self {
-        let router = Router::new()
-            .route("/code/v1/chat/completions", post(api_claude_code))
-            .route("/code/v1/models", get(api_get_models))
-            .layer(
-                ServiceBuilder::new()
-                    .layer(from_extractor::<RequireBearerAuth>())
-                    .layer(CompressionLayer::new())
-                    .layer(map_response(to_oai)),
-            )
-            .with_state(self.claude_providers.code());
+            .route("/api/auth", get(api_auth))
+            .route("/api/version", get(api_version))
+            .route("/api/cookies", get(api_get_cookies))
+            .route("/api/cookie", post(api_post_cookie))
+            .route("/api/cookie", delete(api_delete_cookie))
+            .route("/api/cookie/check", post(api_check_cookie))
+            .route("/api/stats/system", get(api_get_system_stats))
+            .route("/api/stats/cookies", get(api_get_cookie_metrics))
+            .route("/api/stats/historical", post(api_get_historical_stats))
+            .route("/api/stats/reset", post(api_reset_stats))
+            .route("/api/config", get(api_get_config))
+            .route("/api/config", post(api_update_config))
+            .route("/api/config/reset", post(api_reset_config))
+            .route("/api/config/validate", post(api_validate_config))
+            .route("/api/config/export", get(api_export_config))
+            .route("/api/config/import", post(api_import_config))
+            .route("/api/config/templates", get(api_get_config_template))
+            .route("/api/admin/action", post(api_execute_admin_action))
+            .route("/api/admin/status", get(api_get_system_status))
+            .route("/api/admin/health", get(api_health_check))
+            .with_state(self.app_state.clone());
         self.inner = self.inner.merge(router);
         self
     }

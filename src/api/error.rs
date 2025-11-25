@@ -41,6 +41,12 @@ impl ApiError {
             body: serde_json::json!({"error": msg.into()}),
         }
     }
+    pub fn too_many_requests() -> Self {
+        Self {
+            code: StatusCode::TOO_MANY_REQUESTS,
+            body: serde_json::json!({"error": "Too many requests, please try again later"}),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {

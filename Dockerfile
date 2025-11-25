@@ -1,85 +1,42 @@
-FROM node:lts-slim AS frontend-builder
-WORKDIR /build/frontend
-RUN npm install -g pnpm
-COPY frontend/ .
-RUN pnpm install && pnpm run build
+# syntax=docker/dockerfile:1
 
-FROM docker.io/lukemathwalker/cargo-chef:latest-rust-trixie AS chef
-WORKDIR /build
+# ============== Frontend build ==============
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend .
+RUN npm run build
 
-FROM chef AS planner
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
+# ============== Backend build ==============
+FROM rust:1.81-slim-bookworm AS backend-builder
+WORKDIR /app
+ENV CARGO_TERM_COLOR=always
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY frontend ./frontend
+RUN cargo build --release
 
-FROM chef AS backend-builder
-ARG TARGETPLATFORM
-# Install musl target and required dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    musl-tools \
-    musl-dev \
-    cmake \
-    clang \
-    libclang-dev \
-    perl \
-    pkg-config \
-    upx-ucl \
-    && rm -rf /var/lib/apt/lists/*
-RUN rustup target add x86_64-unknown-linux-musl && \
-    rustup target add aarch64-unknown-linux-musl
-COPY --from=planner /build/recipe.json recipe.json
+# ============== Runtime ==============
+FROM debian:bookworm-slim
+WORKDIR /app
+ENV RUST_LOG=info
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates openssl && \
+    rm -rf /var/lib/apt/lists/*
 
-# Build dependencies - this is the caching Docker layer!
-RUN <<EOF
-set -e
-case ${TARGETPLATFORM} in \
-    "linux/amd64") \
-        RUST_TARGET="x86_64-unknown-linux-musl"
-        export CXX="x86_64-linux-gnu-g++"
-        ;; \
-    "linux/arm64") \
-        RUST_TARGET="aarch64-unknown-linux-musl"
-        export CXX="aarch64-linux-gnu-g++"
-        ;; \
-    *) echo "Unsupported architecture: ${TARGETPLATFORM}" >&2; exit 1 ;; \
-esac
-mkdir -p ~/.cargo
-cargo chef cook --release --target ${RUST_TARGET} --no-default-features --features embed-resource,xdg --recipe-path recipe.json
-EOF
+# 后端二进制
+COPY --from=backend-builder /app/target/release/clewdr /app/clewdr
 
-# Build application
-COPY . .
-ENV RUSTFLAGS="-Awarnings"
-COPY --from=frontend-builder /build/static/ ./static
-RUN <<EOF
-set -e
-case ${TARGETPLATFORM} in \
-    "linux/amd64") \
-        RUST_TARGET="x86_64-unknown-linux-musl"
-        export CXX="x86_64-linux-gnu-g++"
-        ;; \
-    "linux/arm64") \
-        RUST_TARGET="aarch64-unknown-linux-musl"
-        export CXX="aarch64-linux-gnu-g++"
-        ;; \
-    *) echo "Unsupported architecture: ${TARGETPLATFORM}" >&2; exit 1 ;; \
-esac
-cargo build --release --target ${RUST_TARGET}  --no-default-features --features embed-resource,xdg --bin clewdr
-upx --best --lzma ./target/${RUST_TARGET}/release/clewdr
-cp ./target/${RUST_TARGET}/release/clewdr /build/clewdr
-mkdir -p /etc/clewdr && cd /etc/clewdr
-touch clewdr.toml && mkdir -p log
-EOF
+# 前端静态资源（axum external-resource 特性会从 /app/static 提供）
+COPY --from=frontend-builder /app/frontend/dist /app/static
 
-FROM gcr.io/distroless/static
-COPY --from=backend-builder /build/clewdr /usr/local/bin/clewdr
-COPY --from=backend-builder /etc/clewdr /etc/
-ENV CLEWDR_IP=0.0.0.0
-ENV CLEWDR_PORT=8484
-ENV CLEWDR_CHECK_UPDATE=FALSE
-ENV CLEWDR_AUTO_UPDATE=FALSE
+# 配置与数据目录
+VOLUME ["/app/ban_prompts", "/app/data"]
 
 EXPOSE 8484
 
-VOLUME [ "/etc/clewdr" ]
-CMD ["/usr/local/bin/clewdr", "--config", "/etc/clewdr/clewdr.toml", "--log-dir", "/etc/clewdr/log"]
+CMD ["/app/clewdr"]
