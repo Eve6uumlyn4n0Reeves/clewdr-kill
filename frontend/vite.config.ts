@@ -9,13 +9,7 @@ export default defineConfig({
     outDir: "../static",
     emptyOutDir: true,
     // 生产优化配置
-    minify: "terser",
-    terserOptions: {
-      compress: {
-        drop_console: true, // 移除console.log
-        drop_debugger: true,
-      },
-    },
+    minify: "esbuild",
     // 代码分割优化
     rollupOptions: {
       output: {

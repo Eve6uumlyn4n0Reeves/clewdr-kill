@@ -21,14 +21,14 @@ panic = "abort"
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
-wreq = { version = "5", features = [
+wreq = { version = "=6.0.0-rc.20", features = [
     "cookies",
     "json",
     "multipart",
     "socks",
     "stream",
 ] }
-wreq-util = "2"
+wreq-util = "=3.0.0-rc.7"
 serde_json = "1"
 const_format = { version = "0.2", features = ["fmt"] }
 serde = { version = "1", features = ["derive"] }

@@ -17,23 +17,26 @@ COPY frontend .
 RUN npm run build
 
 # ============== Backend build ==============
-FROM rust:1.83-alpine AS backend-builder
+FROM rustlang/rust:nightly-slim AS backend-builder
 WORKDIR /app
 
 # 设置构建优化环境变量
 ENV CARGO_TERM_COLOR=always
 ENV CARGO_NET_RETRY=10
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-ENV RUSTFLAGS="-C target-cpu=native -C link-arg=-s"
+ENV RUSTFLAGS="-C target-cpu=native"
 
 # 安装构建依赖
-RUN apk add --no-cache \
-    musl-dev \
-    pkgconfig \
-    openssl-dev \
-    openssl-libs-static \
-    sqlite-dev \
-    sqlite-static
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    libsqlite3-dev \
+    cmake \
+    make \
+    g++ \
+    perl \
+    golang \
+    && rm -rf /var/lib/apt/lists/*
 
 # 复制Cargo文件进行依赖预构建
 COPY Cargo.toml Cargo.lock ./
@@ -54,19 +57,19 @@ RUN touch backend/main.rs backend/lib.rs && \
     cargo build --release --jobs $(nproc)
 
 # ============== Runtime ==============
-FROM alpine:3.19
+FROM debian:bookworm-slim
 WORKDIR /app
 
 # 安装运行时依赖
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     ca-certificates \
-    sqlite \
+    libsqlite3-0 \
     curl \
-    tzdata
+    && rm -rf /var/lib/apt/lists/*
 
 # 创建非特权用户
-RUN addgroup -g 1001 -S clewdr && \
-    adduser -S clewdr -u 1001 -G clewdr
+RUN groupadd -g 1001 clewdr && \
+    useradd -u 1001 -g clewdr -s /bin/sh -m clewdr
 
 # 复制二进制文件
 COPY --from=backend-builder /app/target/release/clewdr-ban-tool /app/clewdr
