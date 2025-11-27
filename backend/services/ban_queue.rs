@@ -4,6 +4,7 @@ use crate::{
     config::{BanCookie, ClewdrCookie},
     db::{CookieStatus, Database, NewCookie, Queries, UpdateCookie},
     error::ClewdrError,
+    services::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue},
 };
 use tracing::{error, info, warn};
 
@@ -18,11 +19,20 @@ pub struct BanQueueInfo {
 #[derive(Debug, Clone)]
 pub struct BanQueueHandle {
     db: Database,
+    dead_letter_queue: DeadLetterQueue,
 }
 
 impl BanQueueHandle {
     pub async fn start_with_db(db: Database) -> Result<Self, ClewdrError> {
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            dead_letter_queue: DeadLetterQueue::new(5000), // 5000个Cookie级别,保留5000条失败记录
+        })
+    }
+
+    /// 获取死信队列引用
+    pub fn dead_letter_queue(&self) -> &DeadLetterQueue {
+        &self.dead_letter_queue
     }
 
     fn pool(&self) -> &sqlx::SqlitePool {
@@ -101,6 +111,7 @@ impl BanQueueHandle {
     }
 
     /// 写库带重试，避免瞬时 DB Busy/锁冲突
+    /// 失败后会记录到死信队列并触发告警日志
     pub async fn mark_processed_with_retry(
         &self,
         cookie: String,
@@ -111,6 +122,7 @@ impl BanQueueHandle {
         max_retries: u32,
     ) -> Result<(), ClewdrError> {
         let mut attempt = 1;
+
         loop {
             match self
                 .mark_processed_internal(
@@ -131,7 +143,40 @@ impl BanQueueHandle {
                     attempt += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    // 所有重试都失败,记录到死信队列
+                    let error_msg = e.to_string();
+                    error!(
+                        audit = true,
+                        alert = "critical",
+                        cookie = %cookie,
+                        retry_count = max_retries,
+                        error = %error_msg,
+                        "CRITICAL: mark_processed failed after {} retries, cookie state may be inconsistent",
+                        max_retries
+                    );
+
+                    // 记录到死信队列
+                    let metadata = serde_json::json!({
+                        "banned": banned,
+                        "error_message": error_message,
+                        "next_retry_at": next_retry_at.map(|t| t.to_rfc3339()),
+                        "last_rate_limited_at": last_rate_limited_at.map(|t| t.to_rfc3339()),
+                    });
+
+                    self.dead_letter_queue
+                        .push(DeadLetterEntry {
+                            cookie: cookie.clone(),
+                            operation: "mark_processed".to_string(),
+                            error_message: error_msg.clone(),
+                            retry_count: max_retries,
+                            timestamp: Utc::now(),
+                            metadata: Some(metadata),
+                        })
+                        .await;
+
+                    return Err(e);
+                }
             }
         }
     }

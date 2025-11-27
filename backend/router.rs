@@ -18,7 +18,7 @@ use crate::{
     db::Database,
     error::ClewdrError,
     middleware::{auth::admin_auth_middleware, request_logging::request_logging_middleware},
-    services::{ban_farm::BanFarm, ban_queue::BanQueueHandle},
+    services::{ban_farm::BanFarm, ban_queue::BanQueueHandle, cleanup_service::CleanupService},
 };
 
 /// Application state shared across all handlers
@@ -135,6 +135,12 @@ impl RouterBuilder {
                 }
             });
         }
+        // 启动数据库清理服务 (每小时清理过期数据)
+        {
+            let cleanup_service = CleanupService::new(db.clone());
+            let _cleanup_handle = cleanup_service.spawn();
+            tracing::info!("Database cleanup service started");
+        }
         let app_state = AppState {
             ban_queue_handle: queue_handle,
             rate_limiter,
@@ -195,6 +201,12 @@ impl RouterBuilder {
             .route("/api/prompts/delete", post(api_delete_prompt))
             .route("/api/admin/action", post(api_execute_admin_action))
             .route("/api/admin/status", get(api_get_system_status))
+            .route("/api/admin/dead-letters", get(api_get_dead_letters))
+            .route(
+                "/api/admin/dead-letters/clear",
+                post(api_clear_dead_letters),
+            )
+            .route("/api/admin/error-report", post(api_report_frontend_errors))
             .with_state(self.app_state.clone())
             .layer(middleware::from_fn_with_state(
                 self.app_state.clone(),

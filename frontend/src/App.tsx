@@ -16,6 +16,7 @@ import StatsView from "./components/StatsView";
 import ConfigView from "./components/ConfigView";
 import ThemeTest from "./test-theme";
 import { Toaster } from "react-hot-toast";
+import { errorReporter } from "./utils/errorReporter";
 
 // Initialize dark mode - now handled in main.tsx
 const initDarkMode = () => {
@@ -24,9 +25,17 @@ const initDarkMode = () => {
 };
 
 function App() {
-  const handleGlobalError = useCallback((error: Error) => {
-    console.error("Global error captured:", error);
-  }, []);
+  const handleGlobalError = useCallback(
+    (error: Error, errorInfo?: React.ErrorInfo) => {
+      console.error("Global error captured:", error);
+
+      // 上报错误到后端审计日志
+      errorReporter.report(error, errorInfo?.componentStack).catch((err) => {
+        console.error("Failed to report error:", err);
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     initDarkMode();

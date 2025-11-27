@@ -3,13 +3,15 @@ mod admin;
 mod auth;
 mod ban;
 mod config;
+mod dead_letter;
+mod error_report;
+mod metrics;
+mod openapi;
 mod prompts;
 mod rate_limiter;
 mod response;
 mod stats;
 mod stats_history;
-mod metrics;
-mod openapi;
 
 pub use admin::{
     api_execute_admin_action, api_get_system_status, api_health_check, AdminAction,
@@ -26,6 +28,10 @@ pub use config::{
     api_reset_config, api_update_config, api_validate_config, ConfigResponse, ConfigUpdateRequest,
     ValidationResult,
 };
+pub use dead_letter::{api_clear_dead_letters, api_get_dead_letters, DeadLetterStats};
+pub use error_report::api_report_frontend_errors;
+pub use metrics::api_metrics;
+pub use openapi::{api_openapi, OPENAPI_JSON};
 pub use prompts::{
     api_delete_prompt, api_get_prompt, api_get_prompts, api_save_prompt, PromptFile,
 };
@@ -38,5 +44,3 @@ pub use stats::{
     CookieMetrics, HistoricalStats, SystemStats,
 };
 pub use stats_history::{get_samples, record_sample, StatsSample};
-pub use metrics::api_metrics;
-pub use openapi::{api_openapi, OPENAPI_JSON};

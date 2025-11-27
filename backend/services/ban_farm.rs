@@ -1,12 +1,15 @@
 use std::{
-    sync::Arc,
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use chrono::{DateTime, Utc};
 
 use tokio::{
-    sync::{Mutex, RwLock},
+    sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
     time::{sleep, timeout},
 };
@@ -27,7 +30,10 @@ pub struct BanFarm {
     prompts: RwLock<Arc<PromptLoader>>,
     config: RwLock<BanConfig>,
     strategy: Arc<dyn StrategyExecutor>,
-    backoff_until: RwLock<Option<Instant>>,
+    /// 使用原子变量存储退避结束时间戳(纳秒),避免锁竞争
+    backoff_until_nanos: AtomicU64,
+    /// 用于通知worker退避结束
+    backoff_notify: Arc<Notify>,
     mode: RwLock<OperationMode>,
     worker_handles: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -56,7 +62,8 @@ impl BanFarm {
             prompts: RwLock::new(prompts),
             config: RwLock::new(config),
             strategy,
-            backoff_until: RwLock::new(None),
+            backoff_until_nanos: AtomicU64::new(0),
+            backoff_notify: Arc::new(Notify::new()),
             mode: RwLock::new(OperationMode::Running),
             worker_handles: Mutex::new(Vec::new()),
         });
@@ -113,8 +120,7 @@ impl BanFarm {
                 self.restart_workers(new_config.concurrency).await?;
                 info!(
                     "Worker pool restarted with concurrency {} -> {}",
-                    current_config.concurrency,
-                    new_config.concurrency
+                    current_config.concurrency, new_config.concurrency
                 );
             }
         }
@@ -326,7 +332,11 @@ impl BanFarm {
                 .submitted_at
                 .as_deref()
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| Utc::now().signed_duration_since(dt.with_timezone(&Utc)).num_hours())
+                .map(|dt| {
+                    Utc::now()
+                        .signed_duration_since(dt.with_timezone(&Utc))
+                        .num_hours()
+                })
                 .unwrap_or(0);
 
             // Use advanced strategy for request execution
@@ -343,14 +353,11 @@ impl BanFarm {
                         worker_id,
                         cookie.cookie.ellipse()
                     );
-                    if let Err(e) = self.queue.mark_processed_with_retry(
-                        cookie_str.clone(),
-                        false,
-                        None,
-                        None,
-                        None,
-                        3,
-                    ).await {
+                    if let Err(e) = self
+                        .queue
+                        .mark_processed_with_retry(cookie_str.clone(), false, None, None, None, 3)
+                        .await
+                    {
                         warn!(
                             "Worker {}: mark_processed failed after success ({}): {}",
                             worker_id,
@@ -373,14 +380,18 @@ impl BanFarm {
                             worker_id,
                             cookie.cookie.ellipse()
                         );
-                        if let Err(e) = self.queue.mark_processed_with_retry(
-                            cookie_str.clone(),
-                            true,
-                            Some("banned".to_string()),
-                            None,
-                            None,
-                            3,
-                        ).await {
+                        if let Err(e) = self
+                            .queue
+                            .mark_processed_with_retry(
+                                cookie_str.clone(),
+                                true,
+                                Some("banned".to_string()),
+                                None,
+                                None,
+                                3,
+                            )
+                            .await
+                        {
                             warn!(
                                 "Worker {}: mark_processed failed for banned cookie ({}): {}",
                                 worker_id,
@@ -402,14 +413,18 @@ impl BanFarm {
                         } else {
                             30
                         };
-                        if let Err(e) = self.queue.mark_processed_with_retry(
-                            cookie_str.clone(),
-                            false,
-                            Some("rate_limited".to_string()),
-                            Some(now + chrono::Duration::minutes(cooldown_minutes)),
-                            Some(now),
-                            3,
-                        ).await {
+                        if let Err(e) = self
+                            .queue
+                            .mark_processed_with_retry(
+                                cookie_str.clone(),
+                                false,
+                                Some("rate_limited".to_string()),
+                                Some(now + chrono::Duration::minutes(cooldown_minutes)),
+                                Some(now),
+                                3,
+                            )
+                            .await
+                        {
                             warn!(
                                 "Worker {}: mark_processed failed for rate limited cookie ({}): {}",
                                 worker_id,
@@ -425,14 +440,18 @@ impl BanFarm {
                             cookie.cookie.ellipse(),
                             e
                         );
-                        if let Err(e) = self.queue.mark_processed_with_retry(
-                            cookie_str.clone(),
-                            false,
-                            Some(err_str),
-                            None,
-                            None,
-                            3,
-                        ).await {
+                        if let Err(e) = self
+                            .queue
+                            .mark_processed_with_retry(
+                                cookie_str.clone(),
+                                false,
+                                Some(err_str),
+                                None,
+                                None,
+                                3,
+                            )
+                            .await
+                        {
                             warn!(
                                 "Worker {}: mark_processed failed for error case ({}): {}",
                                 worker_id,
@@ -467,26 +486,51 @@ impl BanFarm {
 }
 
 impl BanFarm {
+    /// 检查当前是否在退避期内
+    /// 使用原子操作,无锁竞争
     async fn current_backoff_delay(&self) -> Option<Duration> {
-        let guard = self.backoff_until.read().await;
-        if let Some(until) = *guard {
-            let now = Instant::now();
-            if now < until {
-                return Some(until.saturating_duration_since(now));
-            }
+        let until_nanos = self.backoff_until_nanos.load(Ordering::Acquire);
+        if until_nanos == 0 {
+            return None;
         }
-        None
+
+        let now = std::time::SystemTime::now();
+        let now_nanos = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
+        if now_nanos < until_nanos {
+            let remaining_nanos = until_nanos.saturating_sub(now_nanos);
+            Some(Duration::from_nanos(remaining_nanos))
+        } else {
+            // 退避已结束,重置为0
+            self.backoff_until_nanos.store(0, Ordering::Relaxed);
+            None
+        }
     }
 
+    /// 设置全局退避
+    /// 使用原子变量+Notify,避免锁竞争和死锁风险
     async fn set_global_backoff(&self) {
-        // 尽早释放配置锁，避免死锁
+        // 读取配置(仅需读锁,快速释放)
         let pause_seconds = {
             let config_guard = self.config.read().await;
             config_guard.pause_seconds.max(1)
-        }; // 配置锁在这里释放
+        };
 
-        let mut guard = self.backoff_until.write().await;
-        let until = Instant::now() + Duration::from_secs(pause_seconds);
-        *guard = Some(until);
+        // 计算退避结束时间戳(纳秒)
+        let now = std::time::SystemTime::now();
+        let now_nanos = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let until_nanos = now_nanos + (pause_seconds * 1_000_000_000);
+
+        // 原子操作设置时间戳,无锁
+        self.backoff_until_nanos
+            .store(until_nanos, Ordering::Release);
+
+        info!("Global backoff set for {} seconds", pause_seconds);
     }
 }
