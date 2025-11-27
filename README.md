@@ -2,6 +2,35 @@
 
 一个高效的Claude Cookie封号工具。专注于最大化封号效率，采用Rust后端和React前端，使用SQLite进行数据持久化。
 
+## 🚀 极简部署（推荐）
+
+**三步完成部署**：
+
+```bash
+# 1. 克隆并进入项目
+git clone https://github.com/Eve6uumlyn4n0Reeves/clewdr-kill.git
+cd clewdr-kill
+
+# 2. 创建提示词文件（必需）
+mkdir -p ban_prompts
+echo "你的封号提示词内容" > ban_prompts/prompt1.txt
+
+# 3. 启动服务
+docker compose up -d
+```
+
+**访问控制台**：浏览器打开 http://localhost:8484
+
+**查看密码**：`docker compose logs | grep "Generated admin password"`
+
+**停止服务**：`docker compose down`
+
+**更新版本**：`git pull && docker compose up -d --build`
+
+详细配置说明见 [DOCKER.md](./DOCKER.md)
+
+---
+
 ## 特性
 
 - ⚡ **高效封号** - 默认使用 Haiku 模型，成本效益最大化
