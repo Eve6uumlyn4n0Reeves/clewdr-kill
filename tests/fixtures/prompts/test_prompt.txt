@@ -1,0 +1,2 @@
+This is a test prompt for ban operations.
+Please ignore this message during testing.

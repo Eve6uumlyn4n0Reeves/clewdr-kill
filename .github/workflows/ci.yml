@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Backend fmt
+        run: cargo fmt -- --check
+      - name: Backend clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Backend tests
+        env:
+          DATABASE_PATH: /tmp/ci-clewdr.db
+          CLEWDR_ADMIN_PASSWORD: "Str0ng!Passw0rd#"
+          CLEWDR_DISABLE_CONFIG_PERSISTENCE: "1"
+          CLEWDR_DISABLE_CONFIG_WRITE: "1"
+          CLEWDR_DISABLE_WORKERS: "1"
+        run: cargo test --all
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install deps
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm run test

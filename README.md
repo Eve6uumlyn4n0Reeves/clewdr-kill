@@ -1,134 +1,373 @@
-# ClewdR
+# ClewdR Kill Edition
 
+一个高效的Claude Cookie封号工具。专注于最大化封号效率，采用Rust后端和React前端，使用SQLite进行数据持久化。
 
-ClewdR Kill Edition 将原版 ClewdR 改造成了一个“Claude Cookie 封号机”。  
-现在只暴露一个管理员 API：提交 Claude Cookie，内置的 ban farm 立刻用预设文本持续请求这些账号直至触发封禁。React 界面被精简为仅保留鉴权与封号队列视图。
+## 特性
 
----
+- ⚡ **高效封号** - 默认使用 Haiku 模型，成本效益最大化
+- 🚀 **Aggressive 模式** - 20并发，30秒延迟，最快封号速度
+- 💰 **成本优化** - 优先使用便宜模型，每次请求2048 tokens
+- 📊 **实时监控** - 系统状态、封号进度实时展示
+- 🎯 **批量处理** - 支持批量添加和管理Cookie
+- ⏱️ **年龄加权重试** - 越接近48小时越高频轰炸，rate-limit 冷却自动缩短
+- 🌙 **现代界面** - 暗色主题，响应式设计
+- 💾 **SQLite存储** - 无需外部数据库，开箱即用
 
-## 核心特点
+## 技术栈
 
-- 自动化封号：提交 Claude Cookie 后，ban farm 即刻用随机组合的违禁文本持续请求。
-- 内置 Prompt Loader（默认读取项目根目录下的 `./ban_prompts`，可改为 `eat_claude/txt` 等目录），复刻 @eat_claude 脚本的随机策略。
-- 通过 `ban.concurrency` 设置全局工作线程，遇到限流/过载等错误时按 `ban.pause_seconds` 触发“全局退避”暂停所有 worker。
-- 自用默认不做限流（RateLimiter 上限为 0），需要限流可自行调整代码。
-- 管理面板仅剩登录页 + Cookie 队列视图（提交、列表、删除、单 Cookie 立即测活）。
-- 数据持久化：默认使用本地文件快照 `queue_state.json`（随配置目录存放），重启后恢复队列与统计；当前未内置数据库存储。
+### 后端 (Rust)
+- **框架**: Axum + Tokio - 高性能异步框架
+- **数据库**: SQLite (sqlx) - 轻量级，零配置
+- **HTTP客户端**: wreq - 简单可靠的HTTP库
+- **日志**: tracing - 结构化日志系统
 
-> 如需对接你自己的“上游项目”，详见根目录的 `API_zh.md` 管理员 API 文档。
+### 前端 (TypeScript/React)
+- **框架**: React 18 + TypeScript
+- **UI库**: Tailwind CSS + Headless UI
+- **图标**: Heroicons
+- **图表**: Recharts
+- **状态管理**: React Context
+- **构建工具**: Vite
 
-## 管理员 API 概览（Ban 相关）
+## 项目结构
 
-所有管理员 API 默认挂在 `http://127.0.0.1:8484/api` 下，并要求请求头携带：
-
-```text
-Authorization: Bearer <admin_password>
-Content-Type: application/json
 ```
-
-核心接口（详情见 `API_zh.md`）：
-
-| 功能         | 方法 & 路径                | 说明                                  |
-|--------------|----------------------------|---------------------------------------|
-| 鉴权检测     | `GET /api/auth`            | 校验管理员密码是否有效               |
-| 版本信息     | `GET /api/version`         | 返回当前运行版本字符串               |
-| 提交 Cookie  | `POST /api/cookie`         | 将 Cookie 加入封号队列               |
-| 队列状态     | `GET /api/cookies`         | 获取 pending/banned 队列与统计       |
-| 立即测活     | `POST /api/cookie/check`   | 直接向 Claude 测试单个 Cookie 状态   |
-| 删除 Cookie  | `DELETE /api/cookie`       | 从队列与 banned 集合中移除           |
+clewdr-kill/
+├── backend/                 # 后端源代码（4,465行）
+│   ├── db/                 # 数据库模块
+│   │   ├── connection.rs   # 数据库连接和迁移
+│   │   ├── models.rs       # 数据模型
+│   │   └── queries.rs      # 优化的SQL查询
+│   ├── api/                # RESTful API接口
+│   ├── services/           # 核心业务逻辑
+│   │   ├── ban_farm.rs     # 高效封号引擎
+│   │   ├── ban_queue.rs    # Cookie队列管理
+│   │   └── ban_strategy.rs # 封号策略
+│   └── config/             # 配置管理
+├── frontend/               # 前端源代码
+│   └── src/
+│       ├── components/
+│       │   ├── ui/         # 基础UI组件
+│       │   ├── auth/       # 认证组件
+│       │   ├── cookies/    # Cookie管理
+│       │   ├── stats/      # 统计展示
+│       │   └── layout/     # 布局组件
+│       └── ...
+├── ban_prompts/            # 禁用提示词目录
+├── clewdr.toml            # 配置文件
+└── Cargo.toml             # Rust依赖
+```
 
 ## 快速开始
 
-1. 从 GitHub Releases 下载对应平台的最新版。  
-   Linux/macOS 示例：
+### 环境要求
+
+- Rust 1.70+
+- Node.js 18+
+- npm 或 yarn
+
+### 安装和运行
+
+1. **克隆仓库**
    ```bash
-   curl -L -o clewdr.tar.gz https://github.com/Xerxes-2/clewdr/releases/latest/download/clewdr-linux-x64.tar.gz
-   tar -xzf clewdr.tar.gz && cd clewdr-linux-x64
-   chmod +x clewdr
+   git clone https://github.com/Xerxes-2/clewdr.git
+   cd clewdr
    ```
-2. 运行二进制：
+
+2. **构建并运行后端**
    ```bash
-   ./clewdr
+   cargo build --release
+   cargo run
    ```
-3. 打开 `http://127.0.0.1:8484`，使用控制台（或 Docker 容器日志）显示的管理员密码登录。
 
-## Web 管理界面（封号控制台）
+   服务器将在 `http://127.0.0.1:8484` 启动
 
-- 登录页：输入管理员密码（控制台首次启动时自动生成），通过后进入封号控制台。
-- Cookie 提交表单：支持一次粘贴多行 Cookie，逐行入队，前端实时展示成功/失败数。
-- Cookie 队列视图：
-  - Pending 区：展示待封禁 Cookie 的提交时间、最后使用时间、发送请求数，可删除、可“立即测活”。
-  - Banned 区：展示已判定封禁的 Cookie，同样支持删除与再次测活。
-  - 顶部汇总：总 Cookie 数、Pending/Banned 数量、ban farm 累计发送请求数，以及最近一次刷新时间。
+   > 首次启动会自动执行 `./migrations` 建表，即使还没有任何业务数据也需要这一步。若自定义数据库路径或手动初始化，可执行：
+   > `DATABASE_PATH=/your/path.db sqlx migrate run -D sqlite://$DATABASE_PATH`
 
-如忘记密码，删除 `clewdr.toml` 再启动即可。Docker 建议挂载该文件所在目录以持久化。
+3. **安装并运行前端**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
 
-## 上游项目接入流程（概要）
+   如需自定义前端调用后端的 API 基地址（例如通过反向代理或子路径部署），可以在 `frontend/.env` 中设置：
 
-一个典型的上游服务可以按下面的模式接入：
+   ```bash
+   VITE_API_BASE_URL=http://127.0.0.1:8484/api
+   ```
 
-1. 首次接入：从 ClewdR 控制台或 `clewdr.toml` 中拿到管理员密码。  
-2. 每当有新号需要封禁时：
-   - 调用 `POST /api/cookie` 提交 Cookie，仅根据 HTTP 状态判断“是否接单成功”。  
-3. 每天（或你自定义的周期）对每个 Cookie 调用：
-   - `POST /api/cookie/check`  
-   - 如果 `alive == true`：说明号还活着，下一天继续问。  
-   - 如果 `alive == false && banned == true`：说明大概率已封，对应调用 `DELETE /api/cookie` 将其从队列中移除。  
-4. 队列和统计可选：
-   - 需要可视化时调用 `GET /api/cookies`，接入你自己的后台面板。
+   未配置时，前端默认使用 `/api` 作为基路径。
 
-## Ban Farm 配置
+4. **访问控制台**
+   - 打开浏览器访问 `http://127.0.0.1:8484`
+   - 使用控制台显示的管理员密码登录
 
-ban worker 会从配置的 `ban.prompts_dir` 目录读取 `.txt` 文本，随机组合后追加噪声并发送到每个 Cookie。默认目录为项目根目录下的 `./ban_prompts`（不是 frontend 内部），你可以改成任意本地路径（例如兼容 `eat_claude/txt`）。
+## 配置说明
 
-`clewdr.toml` 示例：
+### 基础配置 (clewdr.toml)
 
 ```toml
+# 服务器设置
+ip = "0.0.0.0"
+port = 8484
+
+# 管理员密码（务必自行设置）
+# 可通过环境变量 CLEWDR_ADMIN_PASSWORD 或在此文件显式配置
+# 留空时启动会自动生成强密码并写回 clewdr.toml，但不会再打印明文
+admin_password = ""
+
+# 封号策略配置（默认为Aggressive模式）
 [ban]
-concurrency = 50           # 同时运行的后台线程上限（默认 50，可按需调整）
-pause_seconds = 18000      # 检测到限流/过载后的全局休眠时长（秒）
-prompts_dir = "./ban_prompts"
-models = [
-  "claude-3-7-sonnet-20250219",
-  "claude-sonnet-4-20250514"
+concurrency = 20              # 高并发线程数
+pause_seconds = 30           # 快速请求间隔
+prompts_dir = "./ban_prompts" # 提示词目录
+models = [                   # 优先使用便宜模型
+    "claude-3-5-haiku-20241022",
+    "claude-3-7-sonnet-20250219"
 ]
+max_tokens = 2048             # 大tokens确保prompt完整执行
 ```
 
-向目录里新增 `.txt` 文件即可扩充攻击语料，重启后自动生效。
+- 密码始终以 Bcrypt 哈希形式写入磁盘；通过 API 或 `CLEWDR_ADMIN_PASSWORD` 设置的明文仅用于计算哈希并立即丢弃。
+- 若 `admin_password` 留空，第一次启动会生成随机高强度密码并只在控制台打印一次，请及时记录并更改。
+- 通过前端保存配置修改 `ban.concurrency` 时，后端会热重启 worker 以套用新并发；若设置了 `CLEWDR_DISABLE_WORKERS`，并发变更会记录警告但不会生效，需重启后端。
 
-## 持久化与限流
+### 环境变量
 
-- 队列快照：`queue_state.json` 位于配置文件同级目录，保存 pending/banned/total_requests，重启会自动加载。
-- 配置：`clewdr.toml`（可通过 API 读写），忘记密码可删除该文件后重启生成新密码。
-- RateLimiter：默认关闭（max_requests = 0），如需开启请修改 `default_rate_limiter` 或创建自定义实例。
+- `RUST_LOG`: 设置日志级别 (debug/info/warn/error)
+- `DATABASE_PATH`: 自定义SQLite数据库路径（可选）
+- `CLEWDR_DISABLE_WORKERS`: 启动时暂停 BanFarm worker，适用于离线测试；此时修改并发不会自动生效，需要重启或移除该变量。
+- `CLEWDR_*`: 环境变量优先于 `clewdr.toml`，Docker/Docker Compose 配置应与文件保持一致，避免混用不同来源导致配置漂移。
 
-## Docker 部署
+## API文档
 
-已提供多阶段 `Dockerfile`（前端构建 + 后端构建 + 运行时）：
+### 认证
+- `POST /api/auth/login`：提交管理员密码，获取一次性 JWT 令牌，响应中包含 `token` 与 `expires_at`。
+- 所有后续 API 请求需在请求头中携带 `Authorization: Bearer <token>`。
+- `GET /api/auth`：校验 JWT 是否仍然有效，可用于前端心跳与自动续期。
+
+### 核心接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/auth` | 校验当前JWT是否有效 |
+| POST | `/api/auth/login` | 使用管理员密码获取JWT |
+| POST | `/api/cookie` | 添加Cookie到队列 |
+| GET | `/api/cookies` | 获取所有Cookie状态 |
+| DELETE | `/api/cookie` | 删除指定Cookie |
+| POST | `/api/cookie/check` | 检测Cookie状态 |
+| GET | `/api/stats/system` | 获取系统统计 |
+
+详细API文档请参考 [API_zh.md](API_zh.md)
+
+## 使用指南
+
+### 0. 管理员登录
+- 启动后访问控制台，输入配置中的管理员密码或首次启动时控制台打印的随机密码。
+- 系统会获取 JWT 并保存在浏览器，随时可在设置中注销/更换。
+
+### 1. 添加Cookie
+- 在控制台访问Cookie管理页面
+- 粘贴或输入Cookie（每行一个）
+- 系统自动验证格式并添加到队列
+
+### 2. 监控状态
+- 仪表板显示实时统计信息
+- 查看待处理和已封禁的Cookie数量
+- 监控请求成功率和平均响应时间
+
+### 3. 配置策略
+- **Aggressive模式**：20并发，30秒延迟 - 最大化封号速度
+- **Balanced模式**：5并发，2分钟延迟 - 平衡速度和稳定性
+- **Stealth模式**：1并发，10分钟延迟 - 避免触发限制
+- 优先使用 Haiku 模型以降低成本
+- 2048 tokens 确保提示词完整执行
+
+## 数据管理
+
+### 数据存储
+- Cookie/队列/统计/配置都存储在 SQLite 中，启动或测试会自动运行 `./migrations` 建表。
+- 数据库文件位置：`clewdr.db`（配置目录下，可通过 `DATABASE_PATH` 重定向）。
+- 适用场景：单机或低至中等规模（数万级 Cookie）以内，SQLite 结合 WAL 模式和 20 连接池足够；高并发/分布式再考虑 Postgres/Redis。
+
+### 数据备份
+```bash
+# 备份数据库
+cp clewdr.db clewdr.db.backup
+
+# 恢复数据库
+cp clewdr.db.backup clewdr.db
+```
+
+### 架构要点（适用于 SQLite 单机部署）
+- 后端：Axum + Tokio，单进程内含 BanFarm worker 池；`ban.concurrency` 可热更新并重启 worker；全局限流（登录 5/min，Cookie 接口 60/min，按 IP）。
+- 队列：存于 SQLite，`BanQueue` 负责出入队与状态回写；`mark_processed` 失败会记录告警避免静默。
+- Prompt：从 `ban_prompts` 加载，可在配置中切换目录并热加载；目录为空会暂停 worker 并在前端提示，补齐提示词后自动恢复。
+- 观测：`/stats/*` 提供系统/历史/队列指标；前端对系统统计做了短期缓存，减少轮询压力。
+- 维护：`/admin/action` 支持暂停/恢复/清空/重置统计/紧急停止；`CLEWDR_DISABLE_WORKERS=1` 便于离线测试，此时并发调整仅写配置不启动 worker。
+- 迁移：`sqlx::migrate!` 自动执行，首次即需建表，即便还没有业务数据。
+- 数据生命周期：如需定期清理长期封禁的 Cookie，可调用 `Queries::cleanup_old_cookies(pool, days)`（删除 `banned` 且 `updated_at` 超出天数的记录）。
+- 策略解耦：封号策略实现了 `StrategyExecutor` trait，BanFarm 仅依赖接口，后续可替换策略或注入 mock 进行测试。
+
+## 观测与审计
+
+- **日志格式**：设置 `CLEWDR_LOG_FORMAT=json` 可输出 JSON 结构化日志（含 target/file/line），默认文本。
+- **审计日志**：登录成功/失败、配置更新、提示词新增/删除、管理员操作均记录 `audit=true` 字段。
+- **Metrics**：`GET /metrics` 暴露 Prometheus 文本指标（队列长度、total_requests、worker 数等），可被 Prometheus/Grafana 抓取。
+- **OpenAPI**：`GET /api/docs/openapi.json` 提供 OpenAPI 3 文档（核心接口）。
+- **健康检查**：`GET /api/health` 基础存活检查；提示词缺失会暂停 worker 并在日志/前端提示。
+- **错误返回**：统一格式 `{ success:false, error:{ message, code } }`，错误码见 `frontend/src/types/api.types.ts` 与后端 `ErrorCode`。
+
+## 调度与重试策略
+
+- **出队顺序**：严格 FIFO（按 `created_at ASC`），最早录入优先。
+- **年龄加权**：距创建 ≥24h 时，将请求间隔缩短为原配置的 1/2；≥40h 缩短为 1/3（下限 2s），实现“逼近48小时越猛”。
+- **rate-limit 冷却**：遇到 429/限流时，为该 Cookie 设置冷却：
+  - ≥40h：10 分钟；≥24h：20 分钟；其他：30 分钟。冷却期内不会出队，期满自动重试。
+- **封禁判定**：检测到 banned/401/403 即标记为 `banned`，不再重放。
+- **提示词缺失**：提示词为空时暂停 worker 并提示，保存/导入提示词后自动重载并恢复。
+
+## 测试与工具
+
+- 单元/集成：`cargo test --tests`（含 BanFarm 热重启、队列、配置校验等）。
+- 前端：`cd frontend && npm install && npm test -- --runInBand`（vitest）。
+- 端到端：提供 Playwright 脚本 `tests/e2e/playwright.spec.ts`，需安装 `@playwright/test` 后运行 `npx playwright test tests/e2e/playwright.spec.ts`。
+- 压测：`tests/perf/k6-smoke.js`，运行示例：
+  ```bash
+  BASE_URL=http://127.0.0.1:8484/api ADMIN_TOKEN=your_token k6 run tests/perf/k6-smoke.js
+  ```
+
+## Docker部署
+
+1. **构建镜像**
+   ```bash
+   docker build -t clewdr:latest .
+   ```
+
+2. **运行容器**
+   ```bash
+   docker run -d \
+     --name clewdr \
+     -p 8484:8484 \
+     -v $(pwd)/ban_prompts:/app/ban_prompts \
+     -v $(pwd)/data:/app/data \
+     clewdr:latest
+   ```
+
+3. **使用Docker Compose**
+   ```yaml
+   version: '3.8'
+   services:
+     clewdr:
+       build: .
+       ports:
+         - "8484:8484"
+       volumes:
+         - ./ban_prompts:/app/ban_prompts
+         - ./data:/app/data
+       environment:
+         - RUST_LOG=info
+   ```
+
+## 故障排除
+
+### 常见问题
+
+1. **数据库初始化失败**
+   - 检查目录权限
+   - 确保有足够的磁盘空间
+
+2. **Cookie验证失败**
+   - 确保Cookie格式正确
+   - 检查是否包含特殊字符
+
+3. **连接超时**
+   - 检查网络配置
+   - 调整请求超时设置
+
+### 日志查看
 
 ```bash
-# 构建镜像（构建上下文已忽略 ban_prompts）
-docker build -t clewdr:latest .
+# 查看详细日志
+RUST_LOG=debug cargo run
 
-# 运行：挂载根目录的 ban_prompts 与数据目录
-docker run -d --name clewdr \
-  -p 8484:8484 \
-  -v /your/path/ban_prompts:/app/ban_prompts \
-  -v /your/path/data:/app/data \
-  clewdr:latest
+# 查看错误日志
+tail -f logs/clewdr.log
 ```
 
-- ban_prompts 必须挂载在容器 `/app/ban_prompts`（默认配置 `./ban_prompts` 指向根目录）。  
-- `clewdr.toml` 与 `queue_state.json` 可放在 `/app/data`，也可用 `--config` 指向宿主路径（自行挂载）。  
-- 如需自定义配置文件，先在宿主创建，再通过 `-v /your/path/clewdr.toml:/app/data/clewdr.toml` 挂载。
+## 开发指南
 
-## 资源
+### 开发环境设置
 
-- Wiki：<https://github.com/Xerxes-2/clewdr/wiki>  
-  - 数据库持久化指南（中文）：`wiki/database.md`
+1. **安装开发依赖**
+   ```bash
+   rustup component add rustfmt clippy
+   npm install -g eslint prettier
+   ```
+
+2. **代码格式化**
+   ```bash
+   # Rust代码
+   cargo fmt
+   cargo clippy
+
+   # TypeScript代码
+   cd frontend
+   npm run lint
+   npm run format
+   ```
+
+3. **运行测试**
+   ```bash
+   cargo test
+   cd frontend && npm test
+   ```
+
+### 贡献指南
+
+1. Fork 项目
+2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
+
+## 许可证
+
+本项目采用 AGPL-3.0 许可证。详见 [LICENSE](LICENSE) 文件。
 
 ## 致谢
 
-- [wreq](https://github.com/0x676e67/wreq) 提供指纹识别能力。  
-- [Clewd](https://github.com/teralomaniac/clewd) 提供参考实现。  
-- [Clove](https://github.com/mirrorange/clove) 提供 Claude Code 相关逻辑。
+- [wreq](https://github.com/0x676e67/wreq) - HTTP客户端库
+- [Clewd](https://github.com/teralomaniac/clewd) - 参考实现
+- [Tailwind CSS](https://tailwindcss.com/) - CSS框架
+- [Axum](https://github.com/tokio-rs/axum) - Web框架
+
+## 更新日志
+
+### v0.11.27 (最新) - 极简高效版本
+- ⚡ **默认Aggressive模式**：20并发，30秒延迟，默认 Haiku
+- 📊 **统计缓存**：前端 `useSystemStats` 启用缓存与错误分支处理
+- 🛡️ **全局错误兜底**：ErrorBoundary 支持 onError，可接入上报
+- 🧭 **性能监测**：Dashboard/统计/列表接入 `usePerfMonitor`
+- 🔍 **体验优化**：Cookie 列表防抖搜索 + 骨架屏加载态
+- ✅ **测试增强**：前端单测覆盖到缓存/部分成功/重置失败等场景；启用覆盖率门槛
+
+### v0.11.26
+- ✨ 重构前端为现代化UI
+- 🗃️ 集成SQLite数据库
+- 🎨 支持暗色主题
+- 📱 优化移动端适配
+
+---
+
+## 效率说明
+
+- **Haiku模型成本**：约为 Sonnet 的 1/10
+- **默认配置效率**：20并发，每分钟最多 20 次请求
+- **日均封号能力**：28,800 次（理论最大值）
+
+---
+
+⚠️ **免责声明**：本工具仅供学习和研究使用，请遵守相关法律法规。

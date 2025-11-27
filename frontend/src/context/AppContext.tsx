@@ -6,7 +6,7 @@ import React, {
   useEffect,
   ReactNode,
 } from "react";
-import { getVersion } from "../api";
+import { apiClient } from "../api";
 
 interface AppContextType {
   version: string;
@@ -32,33 +32,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
 
   useEffect(() => {
     // Fetch and set the version when component mounts
-    getVersion().then((v) => setVersion(v));
+    apiClient.getVersion().then((v) => setVersion(v));
 
     // Check for authentication status
     const checkAuth = async () => {
       const storedToken = localStorage.getItem("authToken");
       if (storedToken) {
-        try {
-          const response = await fetch("/api/auth", {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${storedToken}`,
-              "Content-Type": "application/json",
-            },
-          });
-
-          if (response.ok) {
-            setIsAuthenticated(true);
-          } else {
-            // Invalid token, clear it
-            localStorage.removeItem("authToken");
-            setIsAuthenticated(false);
-          }
-        } catch (error) {
-          console.error("Authentication check failed:", error);
-          setIsAuthenticated(false);
+        const ok = await apiClient.validateToken(storedToken);
+        if (ok) {
+          setIsAuthenticated(true);
+          return;
         }
+        localStorage.removeItem("authToken");
       }
+      setIsAuthenticated(false);
     };
 
     checkAuth();

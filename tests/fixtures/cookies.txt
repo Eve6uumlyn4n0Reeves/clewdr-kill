@@ -1,0 +1,6 @@
+# 测试用 Cookie 数据
+# 格式：每行一个 Cookie
+
+sk-ant-sid01-test-valid-cookie-1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+sk-ant-sid01-test-valid-cookie-2-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+sk-ant-sid01-test-valid-cookie-3-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC

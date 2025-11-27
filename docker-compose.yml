@@ -1,0 +1,90 @@
+version: "3.8"
+
+services:
+  clewdr-kill:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: clewdr-kill:latest
+    container_name: clewdr-kill
+    restart: unless-stopped
+
+    # 网络配置
+    ports:
+      - "8484:8484"
+    networks:
+      - clewdr-network
+
+    # 卷挂载 - 优化权限和性能
+    volumes:
+      - ./ban_prompts:/app/ban_prompts:ro # 只读挂载提示词
+      - clewdr_data:/app/data # 数据持久化
+      - type: tmpfs # 临时文件使用内存
+        target: /tmp
+        tmpfs:
+          size: 100M
+
+    # 环境变量 - 保持高效封号配置
+    environment:
+      # 日志配置
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+      - CLEWDR_LOG_FORMAT=json
+
+      # 高效封号配置 - 保持原有的aggressive设置
+      - CLEWDR_BAN_CONCURRENCY=20 # 保持20并发
+      - CLEWDR_BAN_PAUSE_SECONDS=30 # 保持30秒间隔
+      - CLEWDR_BAN_MAX_TOKENS=2048 # 保持大token数
+      - CLEWDR_BAN_REQUEST_TIMEOUT=30000 # 30秒超时
+
+      # 性能优化
+      - DATABASE_PATH=/app/data/clewdr.db
+      - CARGO_TERM_COLOR=always
+
+      # 可选：如果需要代理
+      # - CLEWDR_PROXY=http://proxy:8080
+
+    # 资源限制 - 为高并发封号优化
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0" # 允许使用2个CPU核心支持20并发
+          memory: 1G # 1GB内存支持高并发和缓存
+        reservations:
+          cpus: "1.0" # 保证1个CPU核心
+          memory: 512M # 保证512MB内存
+
+    # 健康检查配置
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8484/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    read_only: false # 需要写入数据库
+
+    # 依赖关系（如果有其他服务）
+    # depends_on:
+    #   - proxy
+
+# 网络配置
+networks:
+  clewdr-network:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1500
+
+# 卷配置
+volumes:
+  clewdr_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data

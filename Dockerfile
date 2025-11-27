@@ -3,40 +3,98 @@
 # ============== Frontend build ==============
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
+
+# 复制package文件以利用Docker层缓存
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+
+# 安装所有依赖（包括开发依赖，因为需要tsc和vite进行构建）
+RUN npm ci && npm cache clean --force
+
+# 复制源代码
 COPY frontend .
+
+# 构建前端，启用生产优化
 RUN npm run build
 
 # ============== Backend build ==============
-FROM rust:1.81-slim-bookworm AS backend-builder
+FROM rust:1.75-alpine AS backend-builder
 WORKDIR /app
+
+# 设置构建优化环境变量
 ENV CARGO_TERM_COLOR=always
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+ENV CARGO_NET_RETRY=10
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+ENV RUSTFLAGS="-C target-cpu=native -C link-arg=-s"
+
+# 安装构建依赖
+RUN apk add --no-cache \
+    musl-dev \
+    pkgconfig \
+    openssl-dev \
+    openssl-libs-static \
+    sqlite-dev \
+    sqlite-static
+
+# 复制Cargo文件进行依赖预构建
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY frontend ./frontend
-RUN cargo build --release
+
+# 创建虚拟main.rs进行依赖构建
+RUN mkdir -p backend && \
+    echo "fn main() {}" > backend/main.rs && \
+    echo "pub fn lib() {}" > backend/lib.rs
+
+# 预构建依赖（利用Docker层缓存）
+RUN cargo build --release --jobs $(nproc)
+
+# 复制实际源代码
+COPY backend ./backend
+
+# 触发重新编译并构建最终二进制
+RUN touch backend/main.rs backend/lib.rs && \
+    cargo build --release --jobs $(nproc)
 
 # ============== Runtime ==============
-FROM debian:bookworm-slim
+FROM alpine:3.19
 WORKDIR /app
-ENV RUST_LOG=info
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates openssl && \
-    rm -rf /var/lib/apt/lists/*
 
-# 后端二进制
-COPY --from=backend-builder /app/target/release/clewdr /app/clewdr
+# 安装运行时依赖
+RUN apk add --no-cache \
+    ca-certificates \
+    sqlite \
+    curl \
+    tzdata
 
-# 前端静态资源（axum external-resource 特性会从 /app/static 提供）
-COPY --from=frontend-builder /app/frontend/dist /app/static
+# 创建非特权用户
+RUN addgroup -g 1001 -S clewdr && \
+    adduser -S clewdr -u 1001 -G clewdr
 
-# 配置与数据目录
+# 复制二进制文件
+COPY --from=backend-builder /app/target/release/clewdr-ban-tool /app/clewdr
+RUN chmod +x /app/clewdr
+
+# 复制前端静态资源
+COPY --from=frontend-builder /app/static /app/static
+
+# 创建必要目录并设置权限
+RUN mkdir -p /app/ban_prompts /app/data && \
+    chown -R clewdr:clewdr /app
+
+# 切换到非特权用户
+USER clewdr
+
+# 配置卷挂载
 VOLUME ["/app/ban_prompts", "/app/data"]
 
+# 暴露端口
 EXPOSE 8484
 
+# 设置环境变量优化性能
+ENV RUST_LOG=info
+ENV RUST_BACKTRACE=1
+
+# 健康检查 - 使用更轻量的检查
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8484/api/health || exit 1
+
+# 启动应用
 CMD ["/app/clewdr"]

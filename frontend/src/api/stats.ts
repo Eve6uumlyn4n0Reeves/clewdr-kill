@@ -1,52 +1,11 @@
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { apiClient } from "./client";
-
-export interface SystemStats {
-  total_cookies: number;
-  pending_cookies: number;
-  banned_cookies: number;
-  total_requests: number;
-  requests_per_minute: number;
-  success_rate: number;
-  average_response_time: number;
-  workers_active: number;
-  uptime_seconds: number;
-  last_update: string;
-  error_distribution: Record<string, number>;
-  performance_metrics: {
-    cpu_usage: number;
-    memory_usage: number;
-    network_latency: number;
-    queue_processing_time: number;
-    strategy_effectiveness: number;
-  };
-}
-
-export interface CookieMetrics {
-  cookie_id: string;
-  requests_sent: number;
-  successful_requests: number;
-  failed_requests: number;
-  average_response_time: number;
-  last_request_time?: string;
-  consecutive_errors: number;
-  adaptive_delay: number;
-  status: 'pending' | 'banned' | 'active';
-}
-
-export interface HistoricalStats {
-  timestamps: string[];
-  request_counts: number[];
-  success_rates: number[];
-  response_times: number[];
-  error_rates: number[];
-}
-
-export interface HistoricalStatsParams {
-  interval_minutes: number;
-  points?: number;
-  start_time?: string;
-  end_time?: string;
-}
+import type {
+  SystemStats,
+  CookieMetrics,
+  HistoricalStats,
+  HistoricalStatsParams,
+} from "../types/api.types";
 
 export const statsApi = {
   /**
@@ -78,30 +37,72 @@ export const statsApi = {
   },
 };
 
-// 便捷的Hook函数
-export const useSystemStats = () => {
+// 便捷的 Hook 函数
+type UseSystemStatsOptions = {
+  refreshIntervalMs?: number;
+};
+
+type CachedStats = {
+  data: SystemStats | null;
+  timestamp: number;
+};
+
+const statsCache: CachedStats = {
+  data: null,
+  timestamp: 0,
+};
+
+// 仅测试使用：重置缓存
+export const __resetSystemStatsCache = () => {
+  statsCache.data = null;
+  statsCache.timestamp = 0;
+};
+
+export const useSystemStats = (options?: UseSystemStatsOptions) => {
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const refreshInterval = Math.max(options?.refreshIntervalMs ?? 15000, 5000);
+  const inFlight = useRef<Promise<void> | null>(null);
 
   const fetchStats = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await statsApi.getSystemStats();
-      setStats(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch stats');
-    } finally {
+    const now = Date.now();
+    if (statsCache.data && now - statsCache.timestamp < refreshInterval) {
+      setStats(statsCache.data);
       setLoading(false);
+      return;
     }
-  }, []);
+
+    if (inFlight.current) {
+      await inFlight.current;
+      return;
+    }
+
+    const promise = (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await statsApi.getSystemStats();
+        statsCache.data = data;
+        statsCache.timestamp = Date.now();
+        setStats(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch stats');
+      } finally {
+        setLoading(false);
+        inFlight.current = null;
+      }
+    })();
+
+    inFlight.current = promise;
+    await promise;
+  }, [refreshInterval]);
 
   useEffect(() => {
     fetchStats();
-    const interval = setInterval(fetchStats, 5000); // 每5秒刷新
+    const interval = setInterval(fetchStats, refreshInterval);
     return () => clearInterval(interval);
-  }, [fetchStats]);
+  }, [fetchStats, refreshInterval]);
 
   return { stats, loading, error, refetch: fetchStats };
 };
@@ -130,6 +131,3 @@ export const useHistoricalStats = (params: HistoricalStatsParams) => {
 
   return { data, loading, error, refetch: fetchData };
 };
-
-// 为了支持这些Hook，需要导入React
-import { useState, useCallback, useEffect } from 'react';

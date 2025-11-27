@@ -1,0 +1,180 @@
+# ClewdR Kill Edition - 生产环境配置
+# 针对高效封号优化的生产配置
+
+# 服务器配置
+ip = "0.0.0.0"
+port = 8484
+
+# 管理员密码 - 请务必修改为强密码
+# 留空时启动会自动生成随机密码
+admin_password = ""
+
+# 禁用配置持久化（生产环境建议启用）
+disable_config_persistence = false
+
+# 封号策略配置 - 高效模式
+[ban]
+# 高并发设置 - 20个并发worker，最大化封号效率
+concurrency = 20
+
+# 快速间隔 - 30秒间隔，保持aggressive模式
+pause_seconds = 30
+
+# 提示词目录
+prompts_dir = "./ban_prompts"
+
+# 模型优先级 - Haiku优先（成本效益最高）
+models = [
+    "claude-3-5-haiku-20241022",    # 主力模型，成本低效率高
+    "claude-3-7-sonnet-20250219"    # 备用模型
+]
+
+# 大token数确保提示词完整执行
+max_tokens = 2048
+
+# 请求超时设置（毫秒）
+request_timeout = 30000
+
+# 生产环境网络配置
+[network]
+# HTTP代理设置（如需要）
+# proxy = "http://proxy.example.com:8080"
+# socks_proxy = "socks5://127.0.0.1:1080"
+
+# 连接池设置
+max_connections = 100
+connection_timeout = 10000
+read_timeout = 30000
+
+# 重试配置
+max_retries = 3
+retry_delay = 1000
+
+# 数据库配置
+[database]
+# SQLite配置优化
+wal_mode = true
+synchronous = "NORMAL"
+cache_size = 10000
+temp_store = "MEMORY"
+journal_mode = "WAL"
+
+# 连接池设置
+max_connections = 20
+min_connections = 5
+acquire_timeout = 30000
+
+# 日志配置
+[logging]
+# 生产环境日志级别
+level = "info"
+
+# 日志格式 - JSON格式便于解析
+format = "json"
+
+# 日志文件配置
+file_enabled = true
+file_path = "./logs/clewdr.log"
+file_max_size = "100MB"
+file_max_files = 10
+
+# 控制台输出
+console_enabled = true
+
+# 性能监控配置
+[monitoring]
+# 启用性能指标收集
+metrics_enabled = true
+
+# Prometheus指标端点
+prometheus_enabled = true
+prometheus_path = "/metrics"
+
+# 健康检查配置
+health_check_enabled = true
+health_check_path = "/api/health"
+
+# 统计数据保留时间（天）
+stats_retention_days = 30
+
+# 安全配置
+[security]
+# CORS设置
+cors_enabled = true
+allowed_origins = ["*"]  # 生产环境请限制具体域名
+
+# 速率限制
+rate_limit_enabled = true
+rate_limit_requests = 60
+rate_limit_window = 60  # 秒
+
+# 登录速率限制
+login_rate_limit = 5
+login_rate_window = 300  # 5分钟
+
+# JWT配置
+jwt_secret = ""  # 留空自动生成
+jwt_expiry = 3600  # 1小时
+
+# 缓存配置
+[cache]
+# 启用内存缓存
+enabled = true
+
+# 缓存大小限制
+max_size = "256MB"
+
+# 缓存TTL设置
+default_ttl = 300  # 5分钟
+stats_ttl = 60     # 统计数据1分钟
+config_ttl = 3600  # 配置1小时
+
+# 高级配置
+[advanced]
+# 工作线程数（0为自动检测）
+worker_threads = 0
+
+# 异步任务队列大小
+task_queue_size = 1000
+
+# 内存分配器（可选：jemalloc, mimalloc）
+allocator = "system"
+
+# 启用性能分析
+profiling_enabled = false
+
+# GC调优（如适用）
+gc_threshold = 1000
+
+# 容器化配置
+[container]
+# 容器内运行优化
+optimize_for_container = true
+
+# 资源限制感知
+respect_cgroup_limits = true
+
+# 优雅关闭超时
+shutdown_timeout = 30
+
+# 信号处理
+handle_signals = true
+
+# 环境变量覆盖说明
+# 以下配置可通过环境变量覆盖：
+# CLEWDR_ADMIN_PASSWORD - 管理员密码
+# CLEWDR_BAN_CONCURRENCY - 并发数
+# CLEWDR_BAN_PAUSE_SECONDS - 间隔时间
+# CLEWDR_BAN_MAX_TOKENS - 最大token数
+# CLEWDR_LOG_LEVEL - 日志级别
+# CLEWDR_LOG_FORMAT - 日志格式
+# DATABASE_PATH - 数据库路径
+# RUST_LOG - Rust日志配置
+
+# 生产环境部署建议：
+# 1. 设置强管理员密码
+# 2. 配置适当的CORS策略
+# 3. 启用日志文件记录
+# 4. 定期备份数据库
+# 5. 监控资源使用情况
+# 6. 设置适当的资源限制

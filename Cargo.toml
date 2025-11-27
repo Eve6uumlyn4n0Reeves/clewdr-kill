@@ -1,12 +1,16 @@
 [package]
 name = "clewdr"
 version = "0.11.26"
-edition = "2024"
+edition = "2021"
 authors = [""]
 license = "AGPL-3.0"
 
 [lib]
-path = "src/lib.rs"
+path = "backend/lib.rs"
+
+[[bin]]
+name = "clewdr-ban-tool"
+path = "backend/main.rs"
 
 [profile.release]
 strip = true
@@ -65,14 +69,16 @@ tower = "0.5"
 bytes = "1"
 async-stream = "0.3"
 rand = "0.8"
+bcrypt = "0.15"
+jsonwebtoken = "9"
 console-subscriber = { version = "0.5", optional = true }
 http = "1"
 snafu = { version = "0.8", features = ["futures", "rust_1_81"] }
-ractor = "0.15"
 mimalloc = { version = "0.1", optional = true }
 dhat = { version = "0", optional = true }
 etcetera = { version = "0", optional = true }
 sysinfo = "0.30"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
 
 [target.'cfg(windows)'.dependencies]
 enable-ansi-support = "0.3"
