@@ -17,7 +17,7 @@ COPY frontend .
 RUN npm run build
 
 # ============== Backend build ==============
-FROM rust:1.75-alpine AS backend-builder
+FROM rust:1.83-alpine AS backend-builder
 WORKDIR /app
 
 # 设置构建优化环境变量
