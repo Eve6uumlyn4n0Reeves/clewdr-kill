@@ -33,11 +33,15 @@ services:
       - RUST_BACKTRACE=1
       - CLEWDR_LOG_FORMAT=json
 
-      # 高效封号配置 - 保持原有的aggressive设置
-      - CLEWDR_BAN_CONCURRENCY=20 # 保持20并发
+      # 高效封号配置 - 针对5000个Cookie优化
+      - CLEWDR_BAN_CONCURRENCY=10 # 从20降到10(5000个Cookie更稳定)
       - CLEWDR_BAN_PAUSE_SECONDS=30 # 保持30秒间隔
-      - CLEWDR_BAN_MAX_TOKENS=2048 # 保持大token数
+      - CLEWDR_BAN_MAX_TOKENS=1024 # 从2048降到1024(节省tokens成本)
       - CLEWDR_BAN_REQUEST_TIMEOUT=30000 # 30秒超时
+
+      # 数据清理配置(新增)
+      - CLEWDR_CLEANUP_ENABLED=true # 启用自动清理
+      - CLEWDR_CLEANUP_INTERVAL_HOURS=1 # 每小时清理一次
 
       # 性能优化
       - DATABASE_PATH=/app/data/clewdr.db
@@ -46,15 +50,15 @@ services:
       # 可选：如果需要代理
       # - CLEWDR_PROXY=http://proxy:8080
 
-    # 资源限制 - 为高并发封号优化
+    # 资源限制 - 针对10并发+5000个Cookie优化
     deploy:
       resources:
         limits:
-          cpus: "2.0" # 允许使用2个CPU核心支持20并发
-          memory: 1G # 1GB内存支持高并发和缓存
+          cpus: "1.5" # 从2降到1.5(10并发足够)
+          memory: 768M # 从1G降到768M(优化内存占用)
         reservations:
-          cpus: "1.0" # 保证1个CPU核心
-          memory: 512M # 保证512MB内存
+          cpus: "0.5" # 保证0.5个CPU核心
+          memory: 384M # 保证384MB内存
 
     # 健康检查配置
     healthcheck:
